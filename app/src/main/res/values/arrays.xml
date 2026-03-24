@@ -3,18 +3,10 @@
     <array name="languages">
         <item name="system">Автоматически</item>
         <item name="ru">Русский</item>
-        <item name="en">English</item>
-        <item name="tr">Türkçe</item>
-        <item name="kk">Қазақша</item>
-        <item name="vi">Tiếng Việt</item>
     </array>
     <array name="languages_entries">
         <item name="system">system</item>
         <item name="ru">ru</item>
-        <item name="en">en</item>
-        <item name="tr">tr</item>
-        <item name="kk">kk</item>
-        <item name="vi">vi</item>
     </array>
 
     <array name="themes">

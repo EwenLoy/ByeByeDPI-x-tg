@@ -8,7 +8,7 @@
 
 Форк **[ByeByeDPI](https://github.com/romanvht/ByeByeDPI)** · автор доработок **[EwenLoy](https://github.com/EwenLoy)** · репозиторий: **https://github.com/EwenLoy/ByeByeDPI-x-tg**
 
-Русский | [English](README-en.md) | [Türkçe](README-tr.md)
+Русский
 
 [![Release](https://img.shields.io/github/v/release/EwenLoy/ByeByeDPI-x-tg?label=release)](https://github.com/EwenLoy/ByeByeDPI-x-tg/releases/latest)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)

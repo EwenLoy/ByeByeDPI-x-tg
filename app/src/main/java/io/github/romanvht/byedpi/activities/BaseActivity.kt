@@ -4,6 +4,7 @@ import android.os.Build
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.color.DynamicColors
+import androidx.core.content.edit
 import io.github.romanvht.byedpi.utility.SettingsUtils
 import io.github.romanvht.byedpi.utility.getPreferences
 import io.github.romanvht.byedpi.utility.getStringNotNull

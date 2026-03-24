@@ -162,7 +162,7 @@ class MainActivity : BaseActivity() {
 
             binding.statusButtonCard.postDelayed({
                 binding.statusButtonCard.isClickable = true
-            }, 1000)
+            }, 3000)
         }
 
         binding.statusButtonCard.setOnFocusChangeListener { _, hasFocus ->

@@ -169,8 +169,9 @@ class ByeDpiProxyService : LifecycleService() {
         Log.i(TAG, "Starting proxy")
 
         if (proxyJob != null) {
-            Log.w(TAG, "Proxy fields not null")
-            throw IllegalStateException("Proxy fields not null")
+            Log.w(TAG, "Proxy job still alive from previous cycle, cleaning up")
+            proxyJob?.cancel()
+            proxyJob = null
         }
 
         proxy = ByeDpiProxy()

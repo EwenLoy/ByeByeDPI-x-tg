@@ -192,8 +192,9 @@ class ByeDpiVpnService : LifecycleVpnService() {
         Log.i(TAG, "Starting proxy")
 
         if (proxyJob != null) {
-            Log.w(TAG, "Proxy fields not null")
-            throw IllegalStateException("Proxy fields not null")
+            Log.w(TAG, "Proxy job still alive from previous cycle, cleaning up")
+            proxyJob?.cancel()
+            proxyJob = null
         }
 
         val preferences = getByeDpiPreferences()
@@ -274,7 +275,9 @@ class ByeDpiVpnService : LifecycleVpnService() {
         Log.i(TAG, "Starting tun2socks")
 
         if (tunFd != null) {
-            throw IllegalStateException("VPN field not null")
+            Log.w(TAG, "tunFd still open from previous cycle, closing")
+            runCatching { tunFd?.close() }
+            tunFd = null
         }
 
         val sharedPreferences = getPreferences()
