@@ -97,7 +97,7 @@ class EwenloyTgWsProxyServer(
     private fun handleClient(client: Socket) {
         client.tcpNoDelay = true
         client.soTimeout = 0
-        applyLargeBuffers(client)
+        applyBuffers(client)
         client.use { c ->
             stats.total.incrementAndGet()
             val input = c.getInputStream()
@@ -195,7 +195,7 @@ class EwenloyTgWsProxyServer(
                 return
             }
 
-            val wsTimeout = if ((dcFailUntilMs[dcKey] ?: 0L) > now) 2_000 else 5_000
+            val wsTimeout = if ((dcFailUntilMs[dcKey] ?: 0L) > now) 2_000 else 10_000
             val domains = EwenloyTelegramRanges.wsDomains(finalDc, isMedia)
 
             val pooled = wsPool[dcKey]?.removeFirstOrNull()?.let {
@@ -255,7 +255,7 @@ class EwenloyTgWsProxyServer(
                 backend.reuseAddress = true; backend.tcpNoDelay = true
                 backend.connect(InetSocketAddress(byeDpiHost, byeDpiPort), 8_000)
                 backend.soTimeout = 0
-                applyLargeBuffers(backend)
+                applyBuffers(backend)
                 val bin = backend.getInputStream()
                 val bout = backend.getOutputStream()
 
@@ -298,7 +298,7 @@ class EwenloyTgWsProxyServer(
                 backend.reuseAddress = true; backend.tcpNoDelay = true
                 backend.connect(InetSocketAddress(byeDpiHost, byeDpiPort), 8_000)
                 backend.soTimeout = 0
-                applyLargeBuffers(backend)
+                applyBuffers(backend)
                 val bin = backend.getInputStream()
                 val bout = backend.getOutputStream()
 
@@ -334,62 +334,87 @@ class EwenloyTgWsProxyServer(
         clientIn: InputStream, clientOut: OutputStream,
         ws: EwenloyRawWebSocket, splitter: EwenloyMtProtoParser.MsgSplitter? = null,
     ) {
-        val up = pool.submit {
-            runCatching {
-                val buf = ByteArray(262_144)
-                while (true) {
-                    val n = clientIn.read(buf); if (n <= 0) break
-                    val payload = buf.copyOf(n)
-                    if (splitter != null) {
-                        val parts = splitter.split(payload)
-                        if (parts.size > 1) ws.sendBatch(parts) else ws.sendBinary(parts[0])
-                    } else ws.sendBinary(payload)
-                    stats.bytesUp.addAndGet(n.toLong())
-                }
+        val closed = AtomicBoolean(false)
+        fun teardown() {
+            if (closed.compareAndSet(false, true)) {
+                runCatching { ws.close() }
+                runCatching { clientOut.close() }
+                runCatching { clientIn.close() }
             }
         }
+
+        val up = pool.submit {
+            try {
+                val buf = ByteArray(65_536)
+                while (true) {
+                    val n = clientIn.read(buf); if (n <= 0) break
+                    if (splitter != null) {
+                        val parts = splitter.split(buf.copyOf(n))
+                        if (parts.size > 1) ws.sendBatch(parts) else ws.sendBinary(parts[0])
+                    } else {
+                        ws.sendBinary(buf, 0, n)
+                    }
+                    stats.bytesUp.addAndGet(n.toLong())
+                }
+            } catch (_: Exception) {
+            } finally { teardown() }
+        }
         val down = pool.submit {
-            runCatching {
+            try {
                 while (true) {
                     val frame = ws.receive() ?: break
                     clientOut.write(frame); clientOut.flush()
                     stats.bytesDown.addAndGet(frame.size.toLong())
                 }
-            }
+            } catch (_: Exception) {
+            } finally { teardown() }
         }
-        runCatching { up.get() }; runCatching { down.get() }; runCatching { ws.close() }
+        runCatching { up.get() }; runCatching { down.get() }
+        teardown()
     }
 
     private fun bridgeTcp(
         clientIn: InputStream, clientOut: OutputStream,
         remoteIn: InputStream, remoteOut: OutputStream,
     ) {
-        val up = pool.submit { runCatching { pipe(clientIn, remoteOut) } }
-        val down = pool.submit { runCatching { pipe(remoteIn, clientOut) } }
+        val closed = AtomicBoolean(false)
+        fun teardown() {
+            if (closed.compareAndSet(false, true)) {
+                runCatching { clientIn.close() }
+                runCatching { clientOut.close() }
+                runCatching { remoteIn.close() }
+                runCatching { remoteOut.close() }
+            }
+        }
+
+        val up = pool.submit {
+            try { pipe(clientIn, remoteOut) }
+            catch (_: Exception) {}
+            finally { teardown() }
+        }
+        val down = pool.submit {
+            try { pipe(remoteIn, clientOut) }
+            catch (_: Exception) {}
+            finally { teardown() }
+        }
         runCatching { up.get() }; runCatching { down.get() }
+        teardown()
     }
 
     private fun pipe(input: InputStream, output: OutputStream) {
-        val buf = ByteArray(262_144)
-        var sinceFlush = 0
+        val buf = ByteArray(65_536)
         while (true) {
             val n = input.read(buf)
             if (n <= 0) break
             output.write(buf, 0, n)
-            sinceFlush += n
-            if (sinceFlush >= 262_144) {
-                output.flush()
-                sinceFlush = 0
-            }
+            output.flush()
         }
-        output.flush()
     }
 
-    private fun applyLargeBuffers(s: Socket) {
-        val sz = 256 * 1024
+    private fun applyBuffers(s: Socket) {
         runCatching {
-            s.receiveBufferSize = sz
-            s.sendBufferSize = sz
+            s.receiveBufferSize = BUF_SIZE
+            s.sendBufferSize = BUF_SIZE
         }
     }
 
@@ -446,5 +471,8 @@ class EwenloyTgWsProxyServer(
             "up=${bytesUp.get()} down=${bytesDown.get()}"
     }
 
-    companion object { private const val TAG = "EwenloyTgWsProxy" }
+    companion object {
+        private const val TAG = "EwenloyTgWsProxy"
+        private const val BUF_SIZE = 256 * 1024
+    }
 }
