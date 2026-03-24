@@ -46,7 +46,7 @@ class ByeDpiProxyService : LifecycleService() {
 
     override fun onCreate() {
         super.onCreate()
-        tgWsServiceExtension.initialize(this, getPreferences())
+        runCatching { tgWsServiceExtension.initialize(this, getPreferences()) }
         registerNotificationChannel(
             this,
             NOTIFICATION_CHANNEL_ID,
@@ -57,34 +57,40 @@ class ByeDpiProxyService : LifecycleService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
 
-        startForeground()
+        try {
+            startForeground()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start foreground", e)
+        }
 
         return when (val action = intent?.action) {
             START_ACTION -> {
                 lifecycleScope.launch {
-                    start()
+                    try { start() } catch (e: Exception) { Log.e(TAG, "start() crashed", e) }
                 }
                 START_STICKY
             }
 
             STOP_ACTION -> {
                 lifecycleScope.launch {
-                    stop()
+                    try { stop() } catch (e: Exception) { Log.e(TAG, "stop() crashed", e) }
                 }
                 START_NOT_STICKY
             }
 
             RESUME_ACTION -> {
                 lifecycleScope.launch {
-                    start()
+                    try { start() } catch (e: Exception) { Log.e(TAG, "resume() crashed", e) }
                 }
                 START_STICKY
             }
 
             PAUSE_ACTION -> {
                 lifecycleScope.launch {
-                    stop()
-                    createNotificationPause()
+                    try {
+                        stop()
+                        createNotificationPause()
+                    } catch (e: Exception) { Log.e(TAG, "pause() crashed", e) }
                 }
                 START_NOT_STICKY
             }
@@ -107,23 +113,23 @@ class ByeDpiProxyService : LifecycleService() {
             return
         }
 
-            try {
-                mutex.withLock {
-                    if (status == ServiceStatus.Connected) {
-                        Log.w(TAG, "Proxy already connected")
-                        return@withLock
-                    }
-                    userRequestedShutdown = false
-                    startProxy()
-                    delay(400)
-                    tgWsServiceExtension.start(getPreferences())
-                    startNotificationRefresh()
-                    updateStatus(ServiceStatus.Connected)
+        try {
+            mutex.withLock {
+                if (status == ServiceStatus.Connected) {
+                    Log.w(TAG, "Proxy already connected")
+                    return@withLock
                 }
+                userRequestedShutdown = false
+                startProxy()
+                delay(400)
+                runCatching { tgWsServiceExtension.start(getPreferences()) }
+                startNotificationRefresh()
+                updateStatus(ServiceStatus.Connected)
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start proxy", e)
             updateStatus(ServiceStatus.Failed)
-            stop()
+            try { stop() } catch (e2: Exception) { Log.e(TAG, "Cleanup after failed start also failed", e2) }
         }
     }
 
@@ -145,24 +151,32 @@ class ByeDpiProxyService : LifecycleService() {
         userRequestedShutdown = true
 
         mutex.withLock {
-            withContext(Dispatchers.IO) {
-                tgWsServiceExtension.stop()
-                stopNotificationRefresh()
-                stopProxy()
+            try {
+                withContext(Dispatchers.IO) {
+                    runCatching { tgWsServiceExtension.stop() }
+                    runCatching { stopNotificationRefresh() }
+                    runCatching { stopProxy() }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to stop proxy", e)
             }
             updateStatus(ServiceStatus.Disconnected)
         }
 
         userRequestedShutdown = false
-        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        nm.cancel(FOREGROUND_SERVICE_ID)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            stopForeground(Service.STOP_FOREGROUND_REMOVE)
-        } else {
-            @Suppress("DEPRECATION")
-            stopForeground(true)
+        runCatching {
+            val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            nm.cancel(FOREGROUND_SERVICE_ID)
         }
-        stopSelf()
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(Service.STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+        }
+        runCatching { stopSelf() }
     }
 
     private fun startProxy() {
@@ -170,7 +184,7 @@ class ByeDpiProxyService : LifecycleService() {
 
         if (proxyJob != null) {
             Log.w(TAG, "Proxy job still alive from previous cycle, cleaning up")
-            proxyJob?.cancel()
+            runCatching { proxyJob?.cancel() }
             proxyJob = null
         }
 
@@ -203,13 +217,17 @@ class ByeDpiProxyService : LifecycleService() {
                         updateStatus(ServiceStatus.Disconnected)
                     }
                 }
-                val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-                nm.cancel(FOREGROUND_SERVICE_ID)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                    stopForeground(Service.STOP_FOREGROUND_REMOVE)
-                } else {
-                    @Suppress("DEPRECATION")
-                    stopForeground(true)
+                runCatching {
+                    val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+                    nm.cancel(FOREGROUND_SERVICE_ID)
+                }
+                runCatching {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                        stopForeground(Service.STOP_FOREGROUND_REMOVE)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        stopForeground(true)
+                    }
                 }
                 runCatching { stopSelf() }
             }
@@ -227,7 +245,7 @@ class ByeDpiProxyService : LifecycleService() {
         }
 
         try {
-            proxy.stopProxy()
+            runCatching { proxy.stopProxy() }
             proxyJob?.cancel()
 
             val completed = withTimeoutOrNull(2000) {
@@ -237,12 +255,13 @@ class ByeDpiProxyService : LifecycleService() {
 
             if (completed == null) {
                 Log.w(TAG, "proxy not finish in time, cancelling...")
-                proxy.jniForceClose()
+                runCatching { proxy.jniForceClose() }
             }
 
             proxyJob = null
         } catch (e: Exception) {
             Log.e(TAG, "Failed to close proxyJob", e)
+            proxyJob = null
         }
 
         Log.i(TAG, "Proxy stopped")
@@ -268,18 +287,20 @@ class ByeDpiProxyService : LifecycleService() {
             Mode.Proxy
         )
 
-        val intent = Intent(
-            when (newStatus) {
-                ServiceStatus.Connected -> STARTED_BROADCAST
-                ServiceStatus.Disconnected -> STOPPED_BROADCAST
-                ServiceStatus.Failed -> FAILED_BROADCAST
-            }
-        )
-        intent.putExtra(SENDER, Sender.Proxy.ordinal)
-        sendBroadcast(intent)
+        runCatching {
+            val intent = Intent(
+                when (newStatus) {
+                    ServiceStatus.Connected -> STARTED_BROADCAST
+                    ServiceStatus.Disconnected -> STOPPED_BROADCAST
+                    ServiceStatus.Failed -> FAILED_BROADCAST
+                }
+            )
+            intent.putExtra(SENDER, Sender.Proxy.ordinal)
+            sendBroadcast(intent)
+        }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            QuickTileService.updateTile()
+            runCatching { QuickTileService.updateTile() }
         }
     }
 
@@ -310,8 +331,10 @@ class ByeDpiProxyService : LifecycleService() {
         if (notificationRefreshJob != null) return
         notificationRefreshJob = lifecycleScope.launch {
             while (status == ServiceStatus.Connected) {
-                val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-                manager.notify(FOREGROUND_SERVICE_ID, createNotification())
+                runCatching {
+                    val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+                    manager.notify(FOREGROUND_SERVICE_ID, createNotification())
+                }
                 delay(1500)
             }
         }

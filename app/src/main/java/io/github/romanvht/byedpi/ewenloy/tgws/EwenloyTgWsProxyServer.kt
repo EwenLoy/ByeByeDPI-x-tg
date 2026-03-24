@@ -17,8 +17,6 @@ import java.util.concurrent.atomic.AtomicLong
 class EwenloyTgWsProxyServer(
     private val host: String,
     private val listenPort: Int,
-    private val byeDpiHost: String,
-    private val byeDpiPort: Int,
     private val onRouteStatus: (String) -> Unit,
     private val onStats: (String) -> Unit,
 ) {
@@ -67,8 +65,8 @@ class EwenloyTgWsProxyServer(
                 pool.execute { handleClient(client) }
             }
         }
-        Log.i(TAG, "=== Proxy started $host:$listenPort → byedpi=$byeDpiHost:$byeDpiPort ===")
-        onStats("proxy_started port=$listenPort backend=$byeDpiPort")
+        Log.i(TAG, "=== TG WS Proxy started $host:$listenPort ===")
+        onStats("proxy_started port=$listenPort")
     }
 
     fun stop() {
@@ -80,7 +78,6 @@ class EwenloyTgWsProxyServer(
         pool.shutdownNow()
     }
 
-    /** Pre-open WS connections like tg-ws-proxy.py warmup (reduces first-connect latency). */
     fun warmup() {
         if (!running.get()) return
         val dcs = listOf(2, 4, 5)
@@ -96,7 +93,7 @@ class EwenloyTgWsProxyServer(
 
     private fun handleClient(client: Socket) {
         client.tcpNoDelay = true
-        client.soTimeout = 0
+        client.soTimeout = 10_000
         applyBuffers(client)
         client.use { c ->
             stats.total.incrementAndGet()
@@ -115,24 +112,23 @@ class EwenloyTgWsProxyServer(
 
             val atyp = reqHdr[3].toInt() and 0xff
             val addr: String
-            val rawAddr: ByteArray
             when (atyp) {
                 1 -> {
-                    rawAddr = ByteArray(4)
-                    if (!readFully(input, rawAddr)) return
-                    addr = rawAddr.joinToString(".") { (it.toInt() and 0xff).toString() }
+                    val raw = ByteArray(4)
+                    if (!readFully(input, raw)) return
+                    addr = raw.joinToString(".") { (it.toInt() and 0xff).toString() }
                 }
                 3 -> {
                     val dlen = input.read()
                     if (dlen <= 0) return
-                    rawAddr = ByteArray(dlen)
-                    if (!readFully(input, rawAddr)) return
-                    addr = rawAddr.toString(Charsets.UTF_8)
+                    val raw = ByteArray(dlen)
+                    if (!readFully(input, raw)) return
+                    addr = raw.toString(Charsets.UTF_8)
                 }
                 4 -> {
-                    rawAddr = ByteArray(16)
-                    if (!readFully(input, rawAddr)) return
-                    addr = InetAddress.getByAddress(rawAddr).hostAddress ?: return
+                    val raw = ByteArray(16)
+                    if (!readFully(input, raw)) return
+                    addr = InetAddress.getByAddress(raw).hostAddress ?: return
                 }
                 else -> { sendReply(output, 0x08); return }
             }
@@ -141,45 +137,60 @@ class EwenloyTgWsProxyServer(
             if (!readFully(input, portBytes)) return
             val port = ByteBuffer.wrap(portBytes).short.toInt() and 0xffff
 
-            if (!EwenloyTelegramRanges.isTelegramIp(addr)) {
-                stats.passthrough.incrementAndGet()
-                routeViaByeDpi(c, input, output, addr, atyp, rawAddr, port)
+            if (addr.contains(":")) {
+                Log.e(TAG, "[$addr:$port] IPv6 not supported")
+                sendReply(output, 0x05)
                 return
             }
 
+            // Non-Telegram → direct passthrough (exactly like flowseal)
+            if (!EwenloyTelegramRanges.isTelegramIp(addr)) {
+                stats.passthrough.incrementAndGet()
+                directPassthrough(c, input, output, addr, port)
+                return
+            }
+
+            // Telegram IP → accept SOCKS, read 64-byte init
             sendReply(output, 0x00)
+            c.soTimeout = 15_000
 
             val init = ByteArray(64)
             if (!readFully(input, init)) return
-            if (isHttpTransport(init)) return
+            if (isHttpTransport(init)) {
+                stats.httpRejected.incrementAndGet()
+                return
+            }
 
+            // Extract DC from init packet
             var patched = init
+            var initPatched = false
             var (dc, isMedia) = EwenloyMtProtoParser.extractDcId(init)
             var splitter: EwenloyMtProtoParser.MsgSplitter? = null
+
             if (dc == null) {
                 EwenloyTelegramRanges.resolveByIp(addr)?.let { mapped ->
                     dc = mapped.first
                     isMedia = mapped.second
                     patched = EwenloyMtProtoParser.patchDcId(init, if (isMedia) dc!! else -dc!!)
-                    splitter = runCatching { EwenloyMtProtoParser.MsgSplitter(init) }.getOrNull()
+                    initPatched = true
                 }
             }
 
             val finalDc = dc
             if (finalDc == null) {
-                Log.w(TAG, "[$addr] unknown DC → ByeDPI")
-                stats.byeDpiConnections.incrementAndGet()
-                lastMode = "byedpi"; onRouteStatus("byedpi")
-                fallbackViaByeDpi(c, input, output, addr, port, init)
+                Log.w(TAG, "[$addr] unknown DC → direct TCP fallback")
+                stats.tcpFallback.incrementAndGet()
+                lastMode = "direct"; onRouteStatus("direct")
+                directTcpFallback(c, input, output, addr, port, init)
                 return
             }
 
             val targetIp = EwenloyTelegramRanges.wsGatewayIp(finalDc)
             if (targetIp == null) {
-                Log.w(TAG, "[$addr] DC$finalDc no WS gateway → ByeDPI")
-                stats.byeDpiConnections.incrementAndGet()
-                lastMode = "byedpi"; onRouteStatus("byedpi")
-                fallbackViaByeDpi(c, input, output, addr, port, init)
+                Log.w(TAG, "[$addr] DC$finalDc no WS gateway → direct TCP fallback")
+                stats.tcpFallback.incrementAndGet()
+                lastMode = "direct"; onRouteStatus("direct")
+                directTcpFallback(c, input, output, addr, port, init)
                 return
             }
 
@@ -187,57 +198,79 @@ class EwenloyTgWsProxyServer(
             val now = System.currentTimeMillis()
             val mediaTag = if (isMedia) " media" else ""
 
+            // WS blacklist check (exactly like flowseal)
             if (wsBlacklist.contains(dcKey)) {
-                Log.d(TAG, "[$addr] DC$finalDc$mediaTag blacklisted → ByeDPI")
-                stats.byeDpiConnections.incrementAndGet()
-                lastMode = "byedpi"; onRouteStatus("byedpi")
-                fallbackViaByeDpi(c, input, output, addr, port, init)
+                Log.d(TAG, "[$addr] DC$finalDc$mediaTag blacklisted → direct TCP")
+                stats.tcpFallback.incrementAndGet()
+                lastMode = "direct"; onRouteStatus("direct")
+                directTcpFallback(c, input, output, addr, port, init)
                 return
             }
 
             val wsTimeout = if ((dcFailUntilMs[dcKey] ?: 0L) > now) 2_000 else 10_000
             val domains = EwenloyTelegramRanges.wsDomains(finalDc, isMedia)
 
+            // Try pool first
             val pooled = wsPool[dcKey]?.removeFirstOrNull()?.let {
                 if (System.currentTimeMillis() - it.createdAtMs <= wsPoolMaxAgeMs) it.ws
                 else { runCatching { it.ws.close() }; null }
             }.also { if (it != null) stats.poolHits.incrementAndGet() else stats.poolMisses.incrementAndGet() }
 
+            // Try WS connect (exactly like flowseal)
             var redirectCount = 0
-            val ws = pooled ?: domains.firstNotNullOfOrNull { domain ->
-                runCatching {
-                    Log.i(TAG, "[$addr] DC$finalDc$mediaTag → wss://$domain/apiws via $targetIp (${wsTimeout}ms)")
-                    EwenloyRawWebSocket.connect(targetIp, domain, wsTimeout)
-                }.getOrElse { ex ->
-                    when (ex) {
-                        is EwenloyWsHandshakeException -> {
-                            stats.wsErrors.incrementAndGet()
-                            if (ex.isRedirect) { redirectCount++; Log.w(TAG, "[$addr] DC$finalDc$mediaTag redirect ${ex.statusCode}") }
-                            else Log.w(TAG, "[$addr] DC$finalDc$mediaTag WS fail: ${ex.statusLine}")
+            var allRedirects = true
+            val ws = pooled ?: run {
+                var result: EwenloyRawWebSocket? = null
+                for (domain in domains) {
+                    try {
+                        Log.i(TAG, "[$addr] DC$finalDc$mediaTag → wss://$domain/apiws via $targetIp (${wsTimeout}ms)")
+                        result = EwenloyRawWebSocket.connect(targetIp, domain, wsTimeout)
+                        allRedirects = false
+                        break
+                    } catch (ex: EwenloyWsHandshakeException) {
+                        stats.wsErrors.incrementAndGet()
+                        if (ex.isRedirect) {
+                            redirectCount++
+                            Log.w(TAG, "[$addr] DC$finalDc$mediaTag redirect ${ex.statusCode}")
+                        } else {
+                            allRedirects = false
+                            Log.w(TAG, "[$addr] DC$finalDc$mediaTag WS fail: ${ex.statusLine}")
                         }
-                        else -> { stats.wsErrors.incrementAndGet(); Log.w(TAG, "[$addr] DC$finalDc$mediaTag WS err: ${ex.message}") }
+                    } catch (ex: Exception) {
+                        stats.wsErrors.incrementAndGet()
+                        allRedirects = false
+                        Log.w(TAG, "[$addr] DC$finalDc$mediaTag WS err: ${ex.message}")
                     }
-                    null
                 }
+                result
             }
 
+            // WS failed → fallback (exactly like flowseal)
             if (ws == null) {
-                if (redirectCount > 0 && redirectCount == domains.size) {
+                if (redirectCount > 0 && allRedirects) {
                     wsBlacklist.add(dcKey)
                     Log.w(TAG, "[$addr] DC$finalDc$mediaTag blacklisted (all redirects)")
+                } else {
+                    dcFailUntilMs[dcKey] = System.currentTimeMillis() + 30_000
+                    Log.i(TAG, "[$addr] DC$finalDc$mediaTag WS cooldown for 30s")
                 }
-                dcFailUntilMs[dcKey] = System.currentTimeMillis() + 30_000
-                Log.i(TAG, "[$addr] DC$finalDc$mediaTag WS failed → ByeDPI fallback")
-                stats.byeDpiConnections.incrementAndGet()
-                lastMode = "byedpi"; onRouteStatus("byedpi")
-                fallbackViaByeDpi(c, input, output, addr, port, init)
+                Log.i(TAG, "[$addr] DC$finalDc$mediaTag WS failed → direct TCP fallback")
+                stats.tcpFallback.incrementAndGet()
+                lastMode = "direct"; onRouteStatus("direct")
+                directTcpFallback(c, input, output, addr, port, init)
                 return
             }
 
+            // WS success
             dcFailUntilMs.remove(dcKey)
             stats.wsConnections.incrementAndGet()
             lastMode = "ws"; onRouteStatus("ws")
             Log.i(TAG, "[$addr] DC$finalDc$mediaTag → WS OK")
+
+            if (initPatched) {
+                splitter = runCatching { EwenloyMtProtoParser.MsgSplitter(init) }.getOrNull()
+            }
+
             ws.sendBinary(patched)
             c.soTimeout = 0
             bridgeWs(input, output, ws, splitter)
@@ -245,88 +278,51 @@ class EwenloyTgWsProxyServer(
         }
     }
 
-    private fun routeViaByeDpi(
+    /** Non-Telegram traffic: direct passthrough (like flowseal _pipe) */
+    private fun directPassthrough(
         clientSock: Socket,
         clientIn: InputStream, clientOut: OutputStream,
-        addr: String, atyp: Int, rawAddr: ByteArray, port: Int,
+        addr: String, port: Int,
     ) {
         try {
-            Socket().use { backend ->
-                backend.reuseAddress = true; backend.tcpNoDelay = true
-                backend.connect(InetSocketAddress(byeDpiHost, byeDpiPort), 8_000)
-                backend.soTimeout = 0
-                applyBuffers(backend)
-                val bin = backend.getInputStream()
-                val bout = backend.getOutputStream()
-
-                bout.write(byteArrayOf(0x05, 0x01, 0x00)); bout.flush()
-                val auth = ByteArray(2)
-                if (!readFully(bin, auth)) { sendReply(clientOut, 0x05); return }
-
-                bout.write(buildSocks5Connect(atyp, rawAddr, port)); bout.flush()
-
-                val resp = ByteArray(4)
-                if (!readFully(bin, resp)) { sendReply(clientOut, 0x05); return }
-                val repCode = resp[1].toInt() and 0xff
-                val bindAtyp = resp[3].toInt() and 0xff
-                val bindAddrLen = when (bindAtyp) {
-                    1 -> 4; 4 -> 16
-                    3 -> bin.read().also { if (it < 0) { sendReply(clientOut, 0x05); return } }
-                    else -> { sendReply(clientOut, 0x05); return }
-                }
-                if (!readFully(bin, ByteArray(bindAddrLen + 2))) { sendReply(clientOut, 0x05); return }
-                if (repCode != 0) { sendReply(clientOut, repCode); return }
+            Socket().use { remote ->
+                remote.tcpNoDelay = true
+                remote.connect(InetSocketAddress(addr, port), 10_000)
+                remote.soTimeout = 0
+                applyBuffers(remote)
 
                 sendReply(clientOut, 0x00)
-                stats.byeDpiConnections.incrementAndGet()
                 clientSock.soTimeout = 0
-                bridgeTcp(clientIn, clientOut, bin, bout)
+                bridgeTcp(clientIn, clientOut, remote.getInputStream(), remote.getOutputStream())
             }
         } catch (e: Exception) {
-            Log.e(TAG, "[$addr:$port] ByeDPI route failed: ${e.message}")
+            Log.w(TAG, "[$addr:$port] passthrough failed: ${e.message}")
             sendReply(clientOut, 0x05)
         }
     }
 
-    private fun fallbackViaByeDpi(
+    /** Telegram traffic when WS fails: direct TCP to DC IP (like flowseal _tcp_fallback) */
+    private fun directTcpFallback(
         clientSock: Socket,
         clientIn: InputStream, clientOut: OutputStream,
         destIp: String, destPort: Int, initData: ByteArray,
     ) {
         try {
-            Socket().use { backend ->
-                backend.reuseAddress = true; backend.tcpNoDelay = true
-                backend.connect(InetSocketAddress(byeDpiHost, byeDpiPort), 8_000)
-                backend.soTimeout = 0
-                applyBuffers(backend)
-                val bin = backend.getInputStream()
-                val bout = backend.getOutputStream()
+            Socket().use { remote ->
+                remote.tcpNoDelay = true
+                remote.connect(InetSocketAddress(destIp, destPort), 10_000)
+                remote.soTimeout = 0
+                applyBuffers(remote)
 
-                bout.write(byteArrayOf(0x05, 0x01, 0x00)); bout.flush()
-                val authResp = ByteArray(2)
-                if (!readFully(bin, authResp) || authResp[0].toInt() != 5) return
+                val rout = remote.getOutputStream()
+                rout.write(initData); rout.flush()
 
-                val ipBytes = InetAddress.getByName(destIp).address
-                bout.write(buildSocks5Connect(if (ipBytes.size == 4) 1 else 4, ipBytes, destPort)); bout.flush()
-
-                val resp = ByteArray(4)
-                if (!readFully(bin, resp)) return
-                val repCode = resp[1].toInt() and 0xff
-                val bindAtyp = resp[3].toInt() and 0xff
-                val bindAddrLen = when (bindAtyp) {
-                    1 -> 4; 4 -> 16; 3 -> bin.read().also { if (it < 0) return }
-                    else -> return
-                }
-                if (!readFully(bin, ByteArray(bindAddrLen + 2))) return
-                if (repCode != 0) { Log.e(TAG, "[$destIp] ByeDPI CONNECT rejected ($repCode)"); return }
-
-                Log.i(TAG, "[$destIp:$destPort] → ByeDPI fallback OK")
-                bout.write(initData); bout.flush()
+                Log.i(TAG, "[$destIp:$destPort] → direct TCP fallback OK")
                 clientSock.soTimeout = 0
-                bridgeTcp(clientIn, clientOut, bin, bout)
+                bridgeTcp(clientIn, clientOut, remote.getInputStream(), rout)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "[$destIp] ByeDPI fallback: ${e.message}")
+            Log.e(TAG, "[$destIp:$destPort] TCP fallback failed: ${e.message}")
         }
     }
 
@@ -388,12 +384,12 @@ class EwenloyTgWsProxyServer(
         }
 
         val up = pool.submit {
-            try { pipe(clientIn, remoteOut) }
+            try { pipe(clientIn, remoteOut, true) }
             catch (_: Exception) {}
             finally { teardown() }
         }
         val down = pool.submit {
-            try { pipe(remoteIn, clientOut) }
+            try { pipe(remoteIn, clientOut, false) }
             catch (_: Exception) {}
             finally { teardown() }
         }
@@ -401,13 +397,15 @@ class EwenloyTgWsProxyServer(
         teardown()
     }
 
-    private fun pipe(input: InputStream, output: OutputStream) {
+    private fun pipe(input: InputStream, output: OutputStream, isUp: Boolean) {
         val buf = ByteArray(65_536)
         while (true) {
             val n = input.read(buf)
             if (n <= 0) break
             output.write(buf, 0, n)
             output.flush()
+            if (isUp) stats.bytesUp.addAndGet(n.toLong())
+            else stats.bytesDown.addAndGet(n.toLong())
         }
     }
 
@@ -438,16 +436,6 @@ class EwenloyTgWsProxyServer(
         runCatching { out.write(byteArrayOf(0x05, code.toByte(), 0x00, 0x01, 0, 0, 0, 0, 0, 0)); out.flush() }
     }
 
-    private fun buildSocks5Connect(atyp: Int, rawAddr: ByteArray, port: Int): ByteArray {
-        val p = byteArrayOf(((port shr 8) and 0xff).toByte(), (port and 0xff).toByte())
-        return when (atyp) {
-            1 -> byteArrayOf(0x05, 0x01, 0x00, 0x01) + rawAddr + p
-            3 -> byteArrayOf(0x05, 0x01, 0x00, 0x03, rawAddr.size.toByte()) + rawAddr + p
-            4 -> byteArrayOf(0x05, 0x01, 0x00, 0x04) + rawAddr + p
-            else -> byteArrayOf(0x05, 0x01, 0x00, 0x01) + rawAddr + p
-        }
-    }
-
     private fun readFully(input: InputStream, dst: ByteArray): Boolean {
         var off = 0
         while (off < dst.size) { val n = input.read(dst, off, dst.size - off); if (n <= 0) return false; off += n }
@@ -463,11 +451,13 @@ class EwenloyTgWsProxyServer(
 
     private class Stats {
         val total = AtomicLong(0); val wsConnections = AtomicLong(0)
-        val byeDpiConnections = AtomicLong(0); val passthrough = AtomicLong(0)
+        val tcpFallback = AtomicLong(0); val passthrough = AtomicLong(0)
+        val httpRejected = AtomicLong(0)
         val wsErrors = AtomicLong(0); val poolHits = AtomicLong(0)
         val poolMisses = AtomicLong(0); val bytesUp = AtomicLong(0); val bytesDown = AtomicLong(0)
-        fun summary() = "total=${total.get()} ws=${wsConnections.get()} byedpi=${byeDpiConnections.get()} " +
-            "pass=${passthrough.get()} err=${wsErrors.get()} pool=${poolHits.get()}/${poolHits.get() + poolMisses.get()} " +
+        fun summary() = "total=${total.get()} ws=${wsConnections.get()} tcp_fb=${tcpFallback.get()} " +
+            "pass=${passthrough.get()} http_skip=${httpRejected.get()} err=${wsErrors.get()} " +
+            "pool=${poolHits.get()}/${poolHits.get() + poolMisses.get()} " +
             "up=${bytesUp.get()} down=${bytesDown.get()}"
     }
 

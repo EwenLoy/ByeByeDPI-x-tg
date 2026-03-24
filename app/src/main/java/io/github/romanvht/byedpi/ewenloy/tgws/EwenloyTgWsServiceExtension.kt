@@ -5,7 +5,6 @@ import android.content.SharedPreferences
 import android.util.Log
 import androidx.core.content.edit
 import io.github.romanvht.byedpi.R
-import io.github.romanvht.byedpi.utility.getStringNotNull
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -32,12 +31,9 @@ class EwenloyTgWsServiceExtension {
             updateRuntimeStatus(TG_STATUS_DISABLED)
             return
         }
-        val byeDpiPort = preferences.getStringNotNull("byedpi_proxy_port", "1080").toIntOrNull() ?: 1080
         val server = EwenloyTgWsProxyServer(
             host = "127.0.0.1",
             listenPort = TG_WS_PORT,
-            byeDpiHost = "127.0.0.1",
-            byeDpiPort = byeDpiPort,
             onRouteStatus = { status -> updateRuntimeStatus(status) },
             onStats = { message -> updateDiagnostics(message) },
         )
@@ -56,12 +52,12 @@ class EwenloyTgWsServiceExtension {
         proxyServer = server
         running = true
         updateRuntimeStatus(TG_STATUS_IDLE)
-        updateDiagnostics("started ws=127.0.0.1:$TG_WS_PORT byedpi=127.0.0.1:$byeDpiPort")
+        updateDiagnostics("started ws=127.0.0.1:$TG_WS_PORT (standalone, no ByeDPI hop)")
         server.warmup()
     }
 
     fun stop() {
-        proxyServer?.stop()
+        runCatching { proxyServer?.stop() }
         proxyServer = null
         running = false
         updateRuntimeStatus(TG_STATUS_DISABLED)
@@ -72,7 +68,7 @@ class EwenloyTgWsServiceExtension {
         when {
             !running || !enabled -> R.string.tg_ws_status_disabled
             runtimeStatus() == TG_STATUS_WS -> R.string.tg_ws_status_ws
-            runtimeStatus() == TG_STATUS_BYEDPI -> R.string.tg_ws_status_byedpi
+            runtimeStatus() == TG_STATUS_DIRECT -> R.string.tg_ws_status_direct
             else -> R.string.tg_ws_status_idle
         }
 
@@ -83,12 +79,12 @@ class EwenloyTgWsServiceExtension {
         preferences?.getString(EWENLOY_TG_RUNTIME_STATUS_KEY, TG_STATUS_DISABLED) ?: TG_STATUS_DISABLED
 
     private fun updateRuntimeStatus(status: String) {
-        preferences?.edit(commit = true) { putString(EWENLOY_TG_RUNTIME_STATUS_KEY, status) }
+        runCatching { preferences?.edit(commit = true) { putString(EWENLOY_TG_RUNTIME_STATUS_KEY, status) } }
     }
 
     private fun updateDiagnostics(message: String) {
         val ts = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
-        preferences?.edit(commit = true) { putString(EWENLOY_TG_DIAGNOSTICS_KEY, "[$ts] $message") }
+        runCatching { preferences?.edit(commit = true) { putString(EWENLOY_TG_DIAGNOSTICS_KEY, "[$ts] $message") } }
     }
 
     companion object {
@@ -100,7 +96,6 @@ class EwenloyTgWsServiceExtension {
         const val TG_STATUS_IDLE = "idle"
         const val TG_STATUS_WS = "ws"
         const val TG_STATUS_DIRECT = "direct"
-        const val TG_STATUS_BYEDPI = "byedpi"
         const val EWENLOY_TG_DIAGNOSTICS_KEY = "ewenloy_tg_diagnostics"
     }
 }

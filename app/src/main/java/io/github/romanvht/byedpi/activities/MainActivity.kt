@@ -154,10 +154,14 @@ class MainActivity : BaseActivity() {
         binding.statusButtonCard.setOnClickListener {
             binding.statusButtonCard.isClickable = false
 
-            val (status, _) = appStatus
-            when (status) {
-                AppStatus.Halted -> start()
-                AppStatus.Running -> stop()
+            try {
+                val (status, _) = appStatus
+                when (status) {
+                    AppStatus.Halted -> start()
+                    AppStatus.Running -> stop()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Button click error", e)
             }
 
             binding.statusButtonCard.postDelayed({
@@ -362,7 +366,7 @@ class MainActivity : BaseActivity() {
 
             tv.text = when (tgStatus) {
                 EwenloyTgWsServiceExtension.TG_STATUS_WS -> getString(R.string.tg_ws_main_ws)
-                EwenloyTgWsServiceExtension.TG_STATUS_BYEDPI -> getString(R.string.tg_ws_main_byedpi)
+                EwenloyTgWsServiceExtension.TG_STATUS_DIRECT -> getString(R.string.tg_ws_main_direct)
                 EwenloyTgWsServiceExtension.TG_STATUS_IDLE -> getString(R.string.tg_ws_main_idle)
                 else -> getString(R.string.tg_ws_status_disabled)
             }

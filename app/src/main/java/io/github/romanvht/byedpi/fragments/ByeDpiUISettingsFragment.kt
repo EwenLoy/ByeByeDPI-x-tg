@@ -166,7 +166,7 @@ class ByeDpiUISettingsFragment : PreferenceFragmentCompat() {
         val summaryRes = when {
             !enabled -> R.string.tg_ws_status_disabled
             status == EwenloyTgWsServiceExtension.TG_STATUS_WS -> R.string.tg_ws_status_ws
-            status == EwenloyTgWsServiceExtension.TG_STATUS_BYEDPI -> R.string.tg_ws_status_byedpi
+            status == EwenloyTgWsServiceExtension.TG_STATUS_DIRECT -> R.string.tg_ws_status_direct
             else -> R.string.tg_ws_status_idle
         }
         statusPref.summary = getString(summaryRes)

@@ -185,7 +185,7 @@
     <string name="tg_ws_mode_enabled_setting">Ускорить Telegram через WS</string>
     <string name="tg_ws_mode_enabled_summary">Трафик Telegram направляется через WS-туннель, остальной трафик идет через ByeDPI</string>
     <string name="tg_ws_status_ws">Telegram: WS туннель активен</string>
-    <string name="tg_ws_status_byedpi">Telegram: через ByeDPI (WS недоступен)</string>
+    <string name="tg_ws_status_direct">Telegram: прямое TCP (WS недоступен)</string>
     <string name="tg_ws_status_idle">Telegram: WS ускорялка готова</string>
     <string name="tg_ws_status_disabled">Telegram WS: выключено</string>
     <string name="ewenloy_tg_runtime_status_title">Статус TG WS</string>
@@ -200,7 +200,7 @@
     <string name="ewenloy_tg_diagnostics_dialog_title">TG WS Diagnostics (live)</string>
     <string name="ewenloy_tg_diagnostics_empty">Нет данных диагностики</string>
     <string name="tg_ws_main_ws">TG WS туннель активен | :1082</string>
-    <string name="tg_ws_main_byedpi">TG через ByeDPI | :1082</string>
+    <string name="tg_ws_main_direct">TG прямое TCP | :1082</string>
     <string name="tg_ws_main_idle">TG WS готова | :1082</string>
     <string name="ewenloy_tg_open_proxy_summary_ws">Подключить Telegram к WS прокси на порту 1082</string>
 </resources>
