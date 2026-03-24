@@ -37,13 +37,17 @@ fun createConnectionNotification(
     channelId: String,
     @StringRes title: Int,
     @StringRes content: Int,
+    @StringRes statusLine: Int? = null,
     service: Class<*>,
 ): Notification =
     NotificationCompat.Builder(context, channelId)
         .setSmallIcon(R.drawable.ic_notification)
         .setSilent(true)
         .setContentTitle(context.getString(title))
-        .setContentText(context.getString(content))
+        .setContentText(
+            statusLine?.let { "${context.getString(content)}\n${context.getString(it)}" }
+                ?: context.getString(content)
+        )
         .addAction(0, context.getString(R.string.service_pause_btn),
             PendingIntent.getService(
                 context,

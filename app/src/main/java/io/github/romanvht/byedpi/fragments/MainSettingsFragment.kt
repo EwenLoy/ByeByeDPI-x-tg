@@ -2,18 +2,35 @@ package io.github.romanvht.byedpi.fragments
 
 import android.content.Intent
 import android.content.SharedPreferences
+import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import android.widget.TextView
+import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.preference.*
 import io.github.romanvht.byedpi.R
 import io.github.romanvht.byedpi.BuildConfig
 import io.github.romanvht.byedpi.activities.TestActivity
+import io.github.romanvht.byedpi.data.AppStatus
 import io.github.romanvht.byedpi.data.Mode
+import io.github.romanvht.byedpi.ewenloy.tgws.EwenloyTgWsServiceExtension
+import io.github.romanvht.byedpi.services.ServiceManager
+import io.github.romanvht.byedpi.services.appStatus
 import io.github.romanvht.byedpi.utility.*
 
 class MainSettingsFragment : PreferenceFragmentCompat() {
     companion object {
         private val TAG: String = MainSettingsFragment::class.java.simpleName
+    }
+    private val uiHandler = Handler(Looper.getMainLooper())
+    private val statusUpdater = object : Runnable {
+        override fun run() {
+            updateTelegramRuntimeStatus()
+            uiHandler.postDelayed(this, 1500)
+        }
     }
 
     private val preferenceListener =
@@ -47,6 +64,40 @@ class MainSettingsFragment : PreferenceFragmentCompat() {
                 true
             }
 
+        findPreferenceNotNull<Preference>("ewenloy_tg_open_proxy_link")
+            .setOnPreferenceClickListener {
+                val prefs = sharedPreferences ?: return@setOnPreferenceClickListener true
+                val tgWsEnabled = prefs.getBoolean(EwenloyTgWsServiceExtension.EWENLOY_TG_WS_MODE_KEY, false)
+                val port = if (tgWsEnabled)
+                    EwenloyTgWsServiceExtension.TG_WS_PORT.toString()
+                else
+                    prefs.getString("byedpi_proxy_port", "1080") ?: "1080"
+                val tgUri = Uri.parse("tg://socks?server=127.0.0.1&port=$port")
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, tgUri))
+                } catch (_: Exception) {
+                    Toast.makeText(requireContext(), R.string.ewenloy_tg_open_proxy_error, Toast.LENGTH_SHORT).show()
+                }
+                true
+            }
+
+        findPreferenceNotNull<Preference>("ewenloy_tg_diagnostics")
+            .setOnPreferenceClickListener {
+                showDiagnosticsDialog()
+                true
+            }
+
+        findPreferenceNotNull<SwitchPreference>("ewenloy_tg_ws_mode_enabled")
+            .setOnPreferenceChangeListener { _, _ ->
+                uiHandler.postDelayed({ updateProxyLinkSummary() }, 100)
+                if (appStatus.first == AppStatus.Running) {
+                    val mode = sharedPreferences?.mode() ?: Mode.VPN
+                    ServiceManager.restart(requireContext(), mode)
+                    Toast.makeText(requireContext(), R.string.service_restart, Toast.LENGTH_SHORT).show()
+                }
+                true
+            }
+
         findPreferenceNotNull<Preference>("battery_optimization")
             .setOnPreferenceClickListener {
                 BatteryUtils.requestBatteryOptimization(requireContext())
@@ -63,17 +114,31 @@ class MainSettingsFragment : PreferenceFragmentCompat() {
         findPreferenceNotNull<Preference>("byedpi_version").summary = "0.17.3"
 
         updatePreferences()
+        updateProxyLinkSummary()
     }
 
     override fun onResume() {
         super.onResume()
         sharedPreferences?.registerOnSharedPreferenceChangeListener(preferenceListener)
+        uiHandler.post(statusUpdater)
         updatePreferences()
     }
 
     override fun onPause() {
         super.onPause()
         sharedPreferences?.unregisterOnSharedPreferenceChangeListener(preferenceListener)
+        uiHandler.removeCallbacks(statusUpdater)
+    }
+
+    private fun updateProxyLinkSummary() {
+        val prefs = sharedPreferences ?: return
+        val tgWsEnabled = prefs.getBoolean(EwenloyTgWsServiceExtension.EWENLOY_TG_WS_MODE_KEY, false)
+        val linkPref = findPreferenceNotNull<Preference>("ewenloy_tg_open_proxy_link")
+        if (tgWsEnabled) {
+            linkPref.summary = getString(R.string.ewenloy_tg_open_proxy_summary_ws)
+        } else {
+            linkPref.summary = getString(R.string.ewenloy_tg_open_proxy_summary)
+        }
     }
 
     private fun updatePreferences() {
@@ -144,5 +209,55 @@ class MainSettingsFragment : PreferenceFragmentCompat() {
         } else {
             storageAccess.summary = getString(R.string.storage_access_summary)
         }
+
+        updateTelegramRuntimeStatus()
+    }
+
+    private fun updateTelegramRuntimeStatus() {
+        val prefs = sharedPreferences ?: return
+        val statusPref = findPreferenceNotNull<Preference>("ewenloy_tg_runtime_status")
+        val enabled = prefs.getBoolean(EwenloyTgWsServiceExtension.EWENLOY_TG_WS_MODE_KEY, false)
+        val status = prefs.getString(
+            EwenloyTgWsServiceExtension.EWENLOY_TG_RUNTIME_STATUS_KEY,
+            EwenloyTgWsServiceExtension.TG_STATUS_DISABLED
+        ) ?: EwenloyTgWsServiceExtension.TG_STATUS_DISABLED
+        val summaryRes = when {
+            !enabled -> R.string.tg_ws_status_disabled
+            status == EwenloyTgWsServiceExtension.TG_STATUS_WS -> R.string.tg_ws_status_ws
+            status == EwenloyTgWsServiceExtension.TG_STATUS_BYEDPI -> R.string.tg_ws_status_byedpi
+            else -> R.string.tg_ws_status_idle
+        }
+        statusPref.summary = getString(summaryRes)
+    }
+
+    private fun showDiagnosticsDialog() {
+        val ctx = requireContext()
+        val tv = TextView(ctx).apply {
+            setPadding(40, 30, 40, 30)
+            textSize = 13f
+        }
+        val dialog = AlertDialog.Builder(ctx)
+            .setTitle(R.string.ewenloy_tg_diagnostics_dialog_title)
+            .setView(tv)
+            .setPositiveButton(android.R.string.ok, null)
+            .create()
+        val updater = object : Runnable {
+            override fun run() {
+                val prefs = sharedPreferences
+                val status = prefs?.getString(
+                    EwenloyTgWsServiceExtension.EWENLOY_TG_RUNTIME_STATUS_KEY,
+                    EwenloyTgWsServiceExtension.TG_STATUS_DISABLED
+                ) ?: EwenloyTgWsServiceExtension.TG_STATUS_DISABLED
+                val last = prefs?.getString(
+                    EwenloyTgWsServiceExtension.EWENLOY_TG_DIAGNOSTICS_KEY,
+                    getString(R.string.ewenloy_tg_diagnostics_empty)
+                ) ?: getString(R.string.ewenloy_tg_diagnostics_empty)
+                tv.text = "status=$status\n$last"
+                if (dialog.isShowing) uiHandler.postDelayed(this, 1000)
+            }
+        }
+        dialog.setOnShowListener { uiHandler.post(updater) }
+        dialog.setOnDismissListener { uiHandler.removeCallbacks(updater) }
+        dialog.show()
     }
 }

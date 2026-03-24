@@ -5,6 +5,36 @@
     android:tag="main_settings">
 
     <androidx.preference.PreferenceCategory
+        android:title="@string/telegram_category">
+
+        <SwitchPreference
+            android:key="ewenloy_tg_ws_mode_enabled"
+            android:icon="@drawable/ic_telegram"
+            android:title="@string/tg_ws_mode_enabled_setting"
+            android:summary="@string/tg_ws_mode_enabled_summary"
+            android:defaultValue="false" />
+
+        <Preference
+            android:key="ewenloy_tg_open_proxy_link"
+            android:icon="@drawable/ic_telegram"
+            android:title="@string/ewenloy_tg_open_proxy_title"
+            android:summary="@string/ewenloy_tg_open_proxy_summary" />
+
+        <Preference
+            android:key="ewenloy_tg_runtime_status"
+            android:icon="@drawable/ic_info"
+            android:title="@string/ewenloy_tg_runtime_status_title"
+            android:summary="@string/tg_ws_status_disabled" />
+
+        <Preference
+            android:key="ewenloy_tg_diagnostics"
+            android:icon="@drawable/ic_description"
+            android:title="@string/ewenloy_tg_diagnostics_title"
+            android:summary="@string/ewenloy_tg_diagnostics_summary" />
+
+    </androidx.preference.PreferenceCategory>
+
+    <androidx.preference.PreferenceCategory
         android:title="@string/general_category">
 
         <ListPreference

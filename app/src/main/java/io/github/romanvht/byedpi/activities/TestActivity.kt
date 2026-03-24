@@ -35,6 +35,8 @@ import io.github.romanvht.byedpi.utility.DomainListUtils
 import io.github.romanvht.byedpi.utility.mode
 import kotlinx.coroutines.*
 import java.io.File
+import java.net.InetSocketAddress
+import java.net.Socket
 
 class TestActivity : BaseActivity() {
 
@@ -42,6 +44,7 @@ class TestActivity : BaseActivity() {
     private lateinit var progressTextView: TextView
     private lateinit var disclaimerTextView: TextView
     private lateinit var startStopButton: Button
+    private lateinit var checkTgWsButton: Button
     private lateinit var strategyAdapter: StrategyResultAdapter
 
     private lateinit var siteChecker: SiteCheckUtils
@@ -74,6 +77,7 @@ class TestActivity : BaseActivity() {
 
         strategiesRecyclerView = findViewById(R.id.strategiesRecyclerView)
         startStopButton = findViewById(R.id.startStopButton)
+        checkTgWsButton = findViewById(R.id.checkTgWsButton)
         progressTextView = findViewById(R.id.progressTextView)
         disclaimerTextView = findViewById(R.id.disclaimerTextView)
 
@@ -117,6 +121,24 @@ class TestActivity : BaseActivity() {
             }
 
             startStopButton.postDelayed({ startStopButton.isClickable = true }, 1000)
+        }
+
+        checkTgWsButton.setOnClickListener {
+            lifecycleScope.launch {
+                checkTgWsButton.isEnabled = false
+                val host = "kws1.web.telegram.org"
+                val isAvailable = withContext(Dispatchers.IO) {
+                    isHostReachable(host, 443, 4000)
+                }
+                val textRes = if (isAvailable) {
+                    R.string.test_tg_ws_ok
+                } else {
+                    R.string.test_tg_ws_fail
+                }
+                progressTextView.text = getString(textRes, host)
+                Toast.makeText(this@TestActivity, getString(textRes, host), Toast.LENGTH_SHORT).show()
+                checkTgWsButton.isEnabled = true
+            }
         }
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -371,6 +393,17 @@ class TestActivity : BaseActivity() {
         } else {
             val content = assets.open("proxytest_strategies.list").bufferedReader().readText()
             content.replace("{sni}", sniValue).lines().map { it.trim() }.filter { it.isNotEmpty() }
+        }
+    }
+
+    private fun isHostReachable(host: String, port: Int, timeoutMs: Int): Boolean {
+        return try {
+            Socket().use { socket ->
+                socket.connect(InetSocketAddress(host, port), timeoutMs)
+                true
+            }
+        } catch (_: Exception) {
+            false
         }
     }
 }

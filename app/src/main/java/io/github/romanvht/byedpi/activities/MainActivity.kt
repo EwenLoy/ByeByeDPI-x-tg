@@ -21,6 +21,7 @@ import androidx.lifecycle.lifecycleScope
 import io.github.romanvht.byedpi.R
 import io.github.romanvht.byedpi.data.*
 import io.github.romanvht.byedpi.databinding.ActivityMainBinding
+import io.github.romanvht.byedpi.ewenloy.tgws.EwenloyTgWsServiceExtension
 import io.github.romanvht.byedpi.services.ServiceManager
 import io.github.romanvht.byedpi.services.appStatus
 import io.github.romanvht.byedpi.utility.*
@@ -32,6 +33,15 @@ import androidx.core.content.edit
 
 class MainActivity : BaseActivity() {
     private lateinit var binding: ActivityMainBinding
+    private val tgWsStatusHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val tgWsStatusUpdater = object : Runnable {
+        override fun run() {
+            if (isFinishing) return
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && isDestroyed) return
+            updateTgWsStatus()
+            tgWsStatusHandler.postDelayed(this, 1500)
+        }
+    }
 
     companion object {
         private val TAG: String = MainActivity::class.java.simpleName
@@ -216,10 +226,17 @@ class MainActivity : BaseActivity() {
         super.onResume()
         updateStatus()
         updateButtonsVisibility()
+        tgWsStatusHandler.post(tgWsStatusUpdater)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        tgWsStatusHandler.removeCallbacks(tgWsStatusUpdater)
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        tgWsStatusHandler.removeCallbacks(tgWsStatusUpdater)
         unregisterReceiver(receiver)
     }
 
@@ -328,6 +345,30 @@ class MainActivity : BaseActivity() {
                     }
                 }
             }
+        }
+    }
+
+    private fun updateTgWsStatus() {
+        val prefs = getPreferences()
+        val enabled = prefs.getBoolean(EwenloyTgWsServiceExtension.EWENLOY_TG_WS_MODE_KEY, false)
+        val (status, _) = appStatus
+
+        val tv = binding.tgWsStatusText ?: return
+        if (enabled && status == AppStatus.Running) {
+            val tgStatus = prefs.getString(
+                EwenloyTgWsServiceExtension.EWENLOY_TG_RUNTIME_STATUS_KEY,
+                EwenloyTgWsServiceExtension.TG_STATUS_DISABLED
+            ) ?: EwenloyTgWsServiceExtension.TG_STATUS_DISABLED
+
+            tv.text = when (tgStatus) {
+                EwenloyTgWsServiceExtension.TG_STATUS_WS -> getString(R.string.tg_ws_main_ws)
+                EwenloyTgWsServiceExtension.TG_STATUS_BYEDPI -> getString(R.string.tg_ws_main_byedpi)
+                EwenloyTgWsServiceExtension.TG_STATUS_IDLE -> getString(R.string.tg_ws_main_idle)
+                else -> getString(R.string.tg_ws_status_disabled)
+            }
+            tv.visibility = View.VISIBLE
+        } else {
+            tv.visibility = View.GONE
         }
     }
 

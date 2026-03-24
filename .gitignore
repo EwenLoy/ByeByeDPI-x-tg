@@ -1,22 +1,75 @@
 # OS
 .DS_Store
+Thumbs.db
 
 # IDE
 .idea/
 .kotlin/
 *.iml
+*.ipr
+*.iws
+.vscode/
+*.swp
+*.swo
 
-# Gradle
+# Gradle (all modules)
 .gradle/
 build/
 
-# Local config
+# Local machine / SDK path (never commit)
 local.properties
+*.local.properties
 
-# Android
+# Android Studio captures
 /captures
+captures/
+
+# NDK / CMake
 .externalNativeBuild
 .cxx
+obj/
 
-# JNI
+# JNI prebuilts (if generated locally)
 app/src/main/jniLibs/
+
+# Signing secrets (never commit)
+*.jks
+*.keystore
+keystore.properties
+signing.properties
+
+# Build artifacts & caches (even if build/ missed)
+*.apk
+*.aab
+*.ap_
+*.dex
+lint-results*.xml
+lint/intermediates/
+
+# ProGuard / R8 outputs (large)
+**/mapping.txt
+**/seeds.txt
+**/usage.txt
+
+# Profiling / heap dumps
+*.hprof
+
+# Local notes / scratch (not for GitHub)
+sbox.md
+*.private.md
+.env
+.env.*
+
+# Fastlane local
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/
+fastlane/test_output/
+
+# macOS
+.AppleDouble
+.LSOverride
+
+# Flowseal tg-ws-proxy (Python) — не вендорим; только Kotlin в app/.../ewenloy/tgws/
+# Если склонировали рядом для сравнения — не копировать внутрь этого репо.
+tg-ws-proxy/

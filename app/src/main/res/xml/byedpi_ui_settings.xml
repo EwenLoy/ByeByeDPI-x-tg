@@ -4,6 +4,37 @@
     android:tag="byedpi_ui_settings">
 
     <androidx.preference.PreferenceCategory
+        android:title="@string/telegram_category"
+        app:iconSpaceReserved="false">
+
+        <CheckBoxPreference
+            android:key="ewenloy_tg_ws_mode_enabled"
+            android:title="@string/tg_ws_mode_enabled_setting"
+            android:summary="@string/tg_ws_mode_enabled_summary"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="ewenloy_tg_open_proxy_link"
+            android:title="@string/ewenloy_tg_open_proxy_title"
+            android:summary="@string/ewenloy_tg_open_proxy_summary"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="ewenloy_tg_runtime_status"
+            android:title="@string/ewenloy_tg_runtime_status_title"
+            android:summary="@string/tg_ws_status_disabled"
+            app:iconSpaceReserved="false" />
+
+        <Preference
+            android:key="ewenloy_tg_diagnostics"
+            android:title="@string/ewenloy_tg_diagnostics_title"
+            android:summary="@string/ewenloy_tg_diagnostics_summary"
+            app:iconSpaceReserved="false" />
+
+    </androidx.preference.PreferenceCategory>
+
+    <androidx.preference.PreferenceCategory
         android:title="@string/byedpi_proxy"
         app:iconSpaceReserved="false">
 

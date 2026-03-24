@@ -1,22 +1,17 @@
 <div align="center">
-  <p>
-    <img src="https://github.com/romanvht/ByeDPIAndroid/raw/master/.github/images/app.svg" alt="Логотип ByeDPI" width="200" />
-  </p>
-  <h1>ByeByeDPI Android</h1>
-  <p>
-    <a href="README.md">Русский</a> |
-    <a href="README-en.md">English</a> |
-    Türkçe
-  </p>
-  <p>
-    <a href="https://github.com/romanvht/ByeByeDPI/releases/latest"><img src="https://img.shields.io/github/v/release/romanvht/ByeByeDPI" alt="Latest Release" /></a>
-    <a href="https://github.com/romanvht/ByeByeDPI/releases"><img src="https://img.shields.io/github/downloads/romanvht/ByeByeDPI/total" alt="Downloads" /></a>
-    <a href="https://github.com/romanvht/ByeByeDPI/blob/master/LICENSE"><img src="https://img.shields.io/github/license/romanvht/ByeByeDPI" alt="License" /></a>
-    <a href="https://github.com/romanvht/ByeByeDPI"><img src="https://img.shields.io/github/languages/code-size/romanvht/ByeByeDPI" alt="GitHub code size in bytes"/></a>
-  </p>
+
+# ByeByeDPI-x-tg
+
+**EwenLoy** çatalı · Telegram WebSocket + ByeDPI · **https://github.com/EwenLoy/ByeByeDPI-x-tg**
+
+<a href="README.md">Русский</a> | <a href="README-en.md">English</a> | Türkçe
+
+[![Release](https://img.shields.io/github/v/release/EwenLoy/ByeByeDPI-x-tg?label=release)](https://github.com/EwenLoy/ByeByeDPI-x-tg/releases/latest)
+[![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
+
 </div>
 
-ByeDPI'yi yerel olarak çalıştıran ve tüm trafiği bunun üzerinden yönlendiren bir Android uygulaması.
+ByeDPI'yi yerel olarak çalıştıran ve trafiği yönlendiren bir Android uygulaması; isteğe bağlı Telegram WS modu (`127.0.0.1:1082`). Ayrıntılar için [README.md](README.md) (Rusça) veya [README-en.md](README-en.md).
 
 Kararlı bir çalışma için ayarları yapmanız gerekebilir. Farklı ayarlar hakkında daha fazla bilgiye [ByeDPI dökümantasyonundan](https://github.com/hufrea/byedpi/blob/v0.13/README.md) ulaşabilirsiniz.
 

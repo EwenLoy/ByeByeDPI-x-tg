@@ -25,6 +25,19 @@
             android:textAllCaps="true"
             android:text="@string/test_start" />
 
+        <Button
+            android:id="@+id/checkTgWsButton"
+            android:layout_width="wrap_content"
+            android:layout_height="42dp"
+            android:layout_marginTop="8dp"
+            android:layout_gravity="center_horizontal"
+            android:insetTop="0dp"
+            android:insetBottom="0dp"
+            android:paddingLeft="10pt"
+            android:paddingRight="10pt"
+            android:textAllCaps="true"
+            android:text="@string/test_tg_ws_button" />
+
         <TextView
             android:id="@+id/progressTextView"
             android:layout_width="match_parent"

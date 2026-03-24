@@ -12,12 +12,12 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "io.github.romanvht.byedpi"
+        applicationId = "io.github.ewenloy.byedpixtg"
         minSdk = 21
         //noinspection OldTargetApi
         targetSdk = 34
-        versionCode = 1730
-        versionName = "1.7.3"
+        versionCode = 1731
+        versionName = "1.7.3-tg"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

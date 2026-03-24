@@ -246,6 +246,16 @@
                 android:textColor="?android:textColorSecondary"
                 tools:text="127.0.0.1:1080" />
 
+            <com.google.android.material.textview.MaterialTextView
+                android:id="@+id/tg_ws_status_text"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textSize="13sp"
+                android:textColor="?android:textColorSecondary"
+                android:visibility="gone"
+                tools:text="TG WS: готова | :1082" />
+
         </LinearLayout>
     </FrameLayout>
 

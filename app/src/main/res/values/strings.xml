@@ -1,6 +1,6 @@
 <resources>
     <string name="byedpi_docs">https://github.com/hufrea/byedpi/blob/main/README.md</string>
-    <string name="app_name">ByeByeDPI</string>
+    <string name="app_name">ByeByeDPI x tg</string>
     <string name="cmd_documentation">Документация ByeDPI</string>
     <string name="toggle_connect">Вкл/Выкл</string>
     <string name="vpn_connect">Подключить</string>
@@ -57,7 +57,7 @@
     <string name="failed_to_start">Не удалось запустить %1$s</string>
     <string name="vpn_channel_name">VPN</string>
     <string name="proxy_channel_name">Прокси</string>
-    <string name="notification_title">ByeByeDPI</string>
+    <string name="notification_title">ByeByeDPI x tg</string>
     <string name="vpn_notification_content">VPN работает</string>
     <string name="proxy_notification_content">Прокси работает</string>
     <string name="general_category">Общие</string>
@@ -181,4 +181,26 @@
     <string name="domain_list_delete_failed">Не удалось удалить список доменов</string>
     <string name="main_btn_test">Подбор</string>
     <string name="main_btn_list">Списки</string>
+    <string name="telegram_category">Telegram</string>
+    <string name="tg_ws_mode_enabled_setting">Ускорить Telegram через WS</string>
+    <string name="tg_ws_mode_enabled_summary">Трафик Telegram направляется через WS-туннель, остальной трафик идет через ByeDPI</string>
+    <string name="tg_ws_status_ws">Telegram: WS туннель активен</string>
+    <string name="tg_ws_status_byedpi">Telegram: через ByeDPI (WS недоступен)</string>
+    <string name="tg_ws_status_idle">Telegram: WS ускорялка готова</string>
+    <string name="tg_ws_status_disabled">Telegram WS: выключено</string>
+    <string name="ewenloy_tg_runtime_status_title">Статус TG WS</string>
+    <string name="test_tg_ws_button">Проверить TG WS</string>
+    <string name="test_tg_ws_ok">TG WS доступен: %1$s</string>
+    <string name="test_tg_ws_fail">TG WS недоступен: %1$s</string>
+    <string name="ewenloy_tg_open_proxy_title">Подключить прокси в Telegram</string>
+    <string name="ewenloy_tg_open_proxy_summary">Открыть tg://socks ссылку с текущим локальным прокси</string>
+    <string name="ewenloy_tg_open_proxy_error">Не удалось открыть Telegram-ссылку</string>
+    <string name="ewenloy_tg_diagnostics_title">TG WS Diagnostics</string>
+    <string name="ewenloy_tg_diagnostics_summary">Живые метрики и последний служебный лог</string>
+    <string name="ewenloy_tg_diagnostics_dialog_title">TG WS Diagnostics (live)</string>
+    <string name="ewenloy_tg_diagnostics_empty">Нет данных диагностики</string>
+    <string name="tg_ws_main_ws">TG WS туннель активен | :1082</string>
+    <string name="tg_ws_main_byedpi">TG через ByeDPI | :1082</string>
+    <string name="tg_ws_main_idle">TG WS готова | :1082</string>
+    <string name="ewenloy_tg_open_proxy_summary_ws">Подключить Telegram к WS прокси на порту 1082</string>
 </resources>

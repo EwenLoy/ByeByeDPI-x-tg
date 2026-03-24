@@ -1,22 +1,20 @@
 <div align="center">
-  <p>
-    <img src="https://github.com/romanvht/ByeDPIAndroid/raw/master/.github/images/app.svg" alt="Логотип ByeDPI" width="200" />
-  </p>
-  <h1>ByeByeDPI Android</h1>
-  <p>
-    <a href="README.md">Русский</a> |
-    English |
-    <a href="README-tr.md">Türkçe</a>
-  </p>
-  <p>
-    <a href="https://github.com/romanvht/ByeByeDPI/releases/latest"><img src="https://img.shields.io/github/v/release/romanvht/ByeByeDPI" alt="Latest Release" /></a>
-    <a href="https://github.com/romanvht/ByeByeDPI/releases"><img src="https://img.shields.io/github/downloads/romanvht/ByeByeDPI/total" alt="Downloads" /></a>
-    <a href="https://github.com/romanvht/ByeByeDPI/blob/master/LICENSE"><img src="https://img.shields.io/github/license/romanvht/ByeByeDPI" alt="License" /></a>
-    <a href="https://github.com/romanvht/ByeByeDPI"><img src="https://img.shields.io/github/languages/code-size/romanvht/ByeByeDPI" alt="GitHub code size in bytes"/></a>
-  </p>
+
+# ByeByeDPI-x-tg
+
+Android app: **ByeDPI** DPI circumvention + optional **Telegram over WebSocket** (SOCKS5 on `127.0.0.1:1082`, ByeDPI on `:1080`).
+
+Fork of **[ByeByeDPI](https://github.com/romanvht/ByeByeDPI)** by **[EwenLoy](https://github.com/EwenLoy)** · **https://github.com/EwenLoy/ByeByeDPI-x-tg**
+
+<a href="README.md">Русский</a> | English | <a href="README-tr.md">Türkçe</a>
+
+[![Release](https://img.shields.io/github/v/release/EwenLoy/ByeByeDPI-x-tg?label=release)](https://github.com/EwenLoy/ByeByeDPI-x-tg/releases/latest)
+[![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
+[![Upstream](https://img.shields.io/badge/upstream-ByeByeDPI-orange)](https://github.com/romanvht/ByeByeDPI)
+
 </div>
 
-An Android application that locally runs ByeDPI and routes all traffic through it.
+WS logic derived from **[tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy)** (MIT); see [NOTICE](NOTICE), [AUTHORS.md](AUTHORS.md), [third-party/licenses/](third-party/licenses/). Full quick start (Russian): [README.md](README.md).
 
 For stable operation, you may need to adjust the settings. You can read more about different settings in the [ByeDPI documentation](https://github.com/hufrea/byedpi/blob/v0.13/README.md).
 

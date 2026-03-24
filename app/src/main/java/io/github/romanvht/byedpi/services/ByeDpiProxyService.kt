@@ -2,6 +2,7 @@ package io.github.romanvht.byedpi.services
 
 import android.app.Notification
 import android.app.NotificationManager
+import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
 import android.os.Build
@@ -12,20 +13,27 @@ import io.github.romanvht.byedpi.R
 import io.github.romanvht.byedpi.core.ByeDpiProxy
 import io.github.romanvht.byedpi.core.ByeDpiProxyPreferences
 import io.github.romanvht.byedpi.data.*
+import io.github.romanvht.byedpi.ewenloy.tgws.EwenloyTgWsServiceExtension
 import io.github.romanvht.byedpi.utility.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 class ByeDpiProxyService : LifecycleService() {
     private var proxy = ByeDpiProxy()
+    private val tgWsServiceExtension = EwenloyTgWsServiceExtension()
     private var proxyJob: Job? = null
+    private var notificationRefreshJob: Job? = null
     private val mutex = Mutex()
+
+    @Volatile
+    private var userRequestedShutdown = false
 
     companion object {
         private val TAG: String = ByeDpiProxyService::class.java.simpleName
@@ -38,6 +46,7 @@ class ByeDpiProxyService : LifecycleService() {
 
     override fun onCreate() {
         super.onCreate()
+        tgWsServiceExtension.initialize(this, getPreferences())
         registerNotificationChannel(
             this,
             NOTIFICATION_CHANNEL_ID,
@@ -98,15 +107,19 @@ class ByeDpiProxyService : LifecycleService() {
             return
         }
 
-        try {
-            mutex.withLock {
-                if (status == ServiceStatus.Connected) {
-                    Log.w(TAG, "Proxy already connected")
-                    return@withLock
+            try {
+                mutex.withLock {
+                    if (status == ServiceStatus.Connected) {
+                        Log.w(TAG, "Proxy already connected")
+                        return@withLock
+                    }
+                    userRequestedShutdown = false
+                    startProxy()
+                    delay(400)
+                    tgWsServiceExtension.start(getPreferences())
+                    startNotificationRefresh()
+                    updateStatus(ServiceStatus.Connected)
                 }
-                startProxy()
-                updateStatus(ServiceStatus.Connected)
-            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start proxy", e)
             updateStatus(ServiceStatus.Failed)
@@ -129,14 +142,26 @@ class ByeDpiProxyService : LifecycleService() {
 
     private suspend fun stop() {
         Log.i(TAG, "Stopping")
+        userRequestedShutdown = true
 
         mutex.withLock {
             withContext(Dispatchers.IO) {
+                tgWsServiceExtension.stop()
+                stopNotificationRefresh()
                 stopProxy()
             }
             updateStatus(ServiceStatus.Disconnected)
         }
 
+        userRequestedShutdown = false
+        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        nm.cancel(FOREGROUND_SERVICE_ID)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(Service.STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
         stopSelf()
     }
 
@@ -152,17 +177,41 @@ class ByeDpiProxyService : LifecycleService() {
         val preferences = getByeDpiPreferences()
 
         proxyJob = lifecycleScope.launch(Dispatchers.IO) {
-            val code = proxy.startProxy(preferences)
+            val code = try {
+                proxy.startProxy(preferences)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "ByeDPI proxy thread ended with error", e)
+                -1
+            }
             delay(500)
 
-            if (code != 0) {
-                Log.e(TAG, "Proxy stopped with code $code")
-                updateStatus(ServiceStatus.Failed)
-            } else {
-                updateStatus(ServiceStatus.Disconnected)
+            if (userRequestedShutdown) {
+                return@launch
             }
 
-            stopSelf()
+            Log.w(TAG, "ByeDPI proxy exited unexpectedly (code=$code), tearing down TG WS")
+            withContext(Dispatchers.Main) {
+                runCatching { tgWsServiceExtension.stop() }
+                runCatching { stopNotificationRefresh() }
+                if (status == ServiceStatus.Connected) {
+                    if (code != 0) {
+                        updateStatus(ServiceStatus.Failed)
+                    } else {
+                        updateStatus(ServiceStatus.Disconnected)
+                    }
+                }
+                val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+                nm.cancel(FOREGROUND_SERVICE_ID)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    stopForeground(Service.STOP_FOREGROUND_REMOVE)
+                } else {
+                    @Suppress("DEPRECATION")
+                    stopForeground(true)
+                }
+                runCatching { stopSelf() }
+            }
         }
 
         Log.i(TAG, "Proxy started")
@@ -171,8 +220,8 @@ class ByeDpiProxyService : LifecycleService() {
     private suspend fun stopProxy() {
         Log.i(TAG, "Stopping proxy")
 
-        if (status == ServiceStatus.Disconnected) {
-            Log.w(TAG, "Proxy already disconnected")
+        if (proxyJob == null) {
+            Log.w(TAG, "Proxy job already null")
             return
         }
 
@@ -239,6 +288,7 @@ class ByeDpiProxyService : LifecycleService() {
             NOTIFICATION_CHANNEL_ID,
             R.string.notification_title,
             R.string.proxy_notification_content,
+            tgWsServiceExtension.statusTextRes(),
             ByeDpiProxyService::class.java,
         )
 
@@ -253,5 +303,21 @@ class ByeDpiProxyService : LifecycleService() {
 
         val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify(PAUSE_NOTIFICATION_ID, notification)
+    }
+
+    private fun startNotificationRefresh() {
+        if (notificationRefreshJob != null) return
+        notificationRefreshJob = lifecycleScope.launch {
+            while (status == ServiceStatus.Connected) {
+                val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+                manager.notify(FOREGROUND_SERVICE_ID, createNotification())
+                delay(1500)
+            }
+        }
+    }
+
+    private fun stopNotificationRefresh() {
+        notificationRefreshJob?.cancel()
+        notificationRefreshJob = null
     }
 }

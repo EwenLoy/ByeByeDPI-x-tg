@@ -11,21 +11,43 @@ import io.github.romanvht.byedpi.utility.shellSplit
 
 sealed interface ByeDpiProxyPreferences {
     companion object {
-        fun fromSharedPreferences(preferences: SharedPreferences, context: Context): ByeDpiProxyPreferences =
+        fun fromSharedPreferences(
+            preferences: SharedPreferences,
+            context: Context,
+            overrideIp: String? = null,
+            overridePort: String? = null,
+            forceOverride: Boolean = false,
+        ): ByeDpiProxyPreferences =
             when (preferences.getBoolean("byedpi_enable_cmd_settings", false)) {
-                true -> ByeDpiProxyCmdPreferences(preferences, context)
-                false -> ByeDpiProxyUIPreferences(preferences)
+                true -> ByeDpiProxyCmdPreferences(preferences, context, overrideIp, overridePort, forceOverride)
+                false -> ByeDpiProxyUIPreferences(preferences, overrideIp, overridePort)
             }
     }
 }
 
 class ByeDpiProxyCmdPreferences(val args: Array<String>) : ByeDpiProxyPreferences {
     constructor(preferences: SharedPreferences, context: Context) : this(
-        parseCmdToArguments(preferences, context)
+        parseCmdToArguments(preferences, context, null, null, false)
+    )
+
+    constructor(
+        preferences: SharedPreferences,
+        context: Context,
+        overrideIp: String?,
+        overridePort: String?,
+        forceOverride: Boolean,
+    ) : this(
+        parseCmdToArguments(preferences, context, overrideIp, overridePort, forceOverride)
     )
 
     companion object {
-        private fun parseCmdToArguments(preferences: SharedPreferences, context: Context): Array<String> {
+        private fun parseCmdToArguments(
+            preferences: SharedPreferences,
+            context: Context,
+            overrideIp: String?,
+            overridePort: String?,
+            forceOverride: Boolean,
+        ): Array<String> {
             val cmd = preferences.getStringNotNull("byedpi_cmd_args", "-Ku -a1 -An -o1 -At,r,s -d1")
             val preparedCmd = getLists(cmd, context)
 
@@ -35,21 +57,24 @@ class ByeDpiProxyCmdPreferences(val args: Array<String>) : ByeDpiProxyPreference
             Log.d("ProxyPref", "CMD: $args")
 
             val (cmdIp, cmdPort) = preferences.checkIpAndPortInCmd()
-            val ip = preferences.getStringNotNull("byedpi_proxy_ip", "127.0.0.1")
-            val port = preferences.getStringNotNull("byedpi_proxy_port", "1080")
+            val ip = overrideIp ?: preferences.getStringNotNull("byedpi_proxy_ip", "127.0.0.1")
+            val port = overridePort ?: preferences.getStringNotNull("byedpi_proxy_port", "1080")
             val enableHttp = preferences.getBoolean("byedpi_http_connect", false)
             val hasHttp = args.contains("-G") || args.contains("--http-connect")
 
             val prefix = buildString {
-                if (cmdIp == null) append("--ip $ip ")
-                if (cmdPort == null) append("--port $port ")
+                if (forceOverride || cmdIp == null) append("--ip $ip ")
+                if (forceOverride || cmdPort == null) append("--port $port ")
                 if (enableHttp && !hasHttp) append("--http-connect ")
             }
 
             Log.d("ProxyPref", "Added from settings: $prefix")
 
             return if (prefix.isNotEmpty()) {
-                arrayOf("ciadpi") + shellSplit("$prefix$args")
+                // When forceOverride, append AFTER user args so last value wins in ciadpi CLI parser.
+                // Otherwise prepend so user args can still override.
+                val combined = if (forceOverride) "$args $prefix" else "$prefix$args"
+                arrayOf("ciadpi") + shellSplit(combined)
             } else {
                 arrayOf("ciadpi") + shellSplit(args)
             }
@@ -76,6 +101,13 @@ class ByeDpiProxyUIPreferences(val settings: UISettings = UISettings()) : ByeDpi
 
     constructor(preferences: SharedPreferences) : this(
         UISettings.fromSharedPreferences(preferences)
+    )
+
+    constructor(preferences: SharedPreferences, overrideIp: String?, overridePort: String?) : this(
+        UISettings.fromSharedPreferences(preferences).copy(
+            ip = overrideIp ?: UISettings.fromSharedPreferences(preferences).ip,
+            port = overridePort?.toIntOrNull() ?: UISettings.fromSharedPreferences(preferences).port
+        )
     )
 
     val uiargs: Array<String>
