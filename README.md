@@ -1,4 +1,6 @@
 <div align="center">
+<img width="200" height="200" alt="iconapp" src="https://github.com/user-attachments/assets/5fe6b110-04ec-4b2b-8891-e73307cb556f" alt="Логотип ByeDPI" width="200" />
+
 
 # ByeByeDPI-x-tg
 
