@@ -2,6 +2,7 @@ package io.github.romanvht.byedpi.ewenloy.tgws
 
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
+import java.io.ByteArrayOutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.security.SecureRandom
@@ -33,35 +34,79 @@ class EwenloyRawWebSocket private constructor(
         output.flush()
     }
 
+    /**
+     * One complete WebSocket message (RFC 6455): concatenates BINARY/TEXT + CONTINUATION (opcode 0)
+     * until FIN. Official Telegram can fragment large downlink payloads; returning only the first
+     * chunk broke MTProto and caused 0 KB / endless media load on SOCKS5.
+     */
     fun receive(): ByteArray? {
+        val message = ByteArrayOutputStream(65536)
+        var fragmentOpen = false
+
         while (!closed) {
             val hdr1 = input.read()
             if (hdr1 < 0) return null
             val hdr2 = input.read()
             if (hdr2 < 0) return null
+            val fin = (hdr1 and 0x80) != 0
             val opcode = hdr1 and 0x0f
             val masked = (hdr2 and 0x80) != 0
             var len = (hdr2 and 0x7f).toLong()
-            if (len == 126L) len = readExact(2).let { ((it[0].toInt() and 0xff) shl 8 or (it[1].toInt() and 0xff)).toLong() }
-            else if (len == 127L) len = readExact(8).fold(0L) { acc, b -> (acc shl 8) or (b.toLong() and 0xff) }
+            if (len == 126L) {
+                val e = readExact(2)
+                len = ((e[0].toInt() and 0xff) shl 8 or (e[1].toInt() and 0xff)).toLong()
+            } else if (len == 127L) {
+                len = readExact(8).fold(0L) { acc, b -> (acc shl 8) or (b.toLong() and 0xff) }
+            }
+            if (len < 0 || len > MAX_WS_FRAME_PAYLOAD) {
+                close()
+                return null
+            }
+            if (fragmentOpen && message.size().toLong() + len > MAX_WS_MESSAGE_BYTES) {
+                close()
+                return null
+            }
             val mask = if (masked) readExact(4) else null
             val payload = readExact(len.toInt())
             if (masked && mask != null) {
-                for (i in payload.indices) payload[i] = (payload[i].toInt() xor mask[i % 4].toInt()).toByte()
+                for (i in payload.indices) {
+                    payload[i] = (payload[i].toInt() xor mask[i % 4].toInt()).toByte()
+                }
             }
             when (opcode) {
-                0x2, 0x1 -> return payload
                 0x8 -> {
                     runCatching {
                         val closeReply = buildFrame(0x8, payload, 0, minOf(2, payload.size), true)
-                        output.write(closeReply); output.flush()
+                        output.write(closeReply)
+                        output.flush()
                     }
                     return null
                 }
                 0x9 -> {
                     val pong = buildFrame(0xA, payload, 0, payload.size, true)
-                    output.write(pong); output.flush()
+                    output.write(pong)
+                    output.flush()
                 }
+                0xA -> { /* ignore */ }
+                0x0 -> {
+                    if (!fragmentOpen) continue
+                    message.write(payload)
+                    if (fin) {
+                        fragmentOpen = false
+                        return message.toByteArray()
+                    }
+                }
+                0x1, 0x2 -> {
+                    if (fragmentOpen) message.reset()
+                    fragmentOpen = !fin
+                    message.reset()
+                    message.write(payload)
+                    if (fin) {
+                        fragmentOpen = false
+                        return message.toByteArray()
+                    }
+                }
+                else -> continue
             }
         }
         return null
@@ -92,6 +137,11 @@ class EwenloyRawWebSocket private constructor(
     }
 
     companion object {
+        /** Single-frame payload limit (extension frames are rare for Telegram). */
+        private const val MAX_WS_FRAME_PAYLOAD = 16L * 1024L * 1024L
+        /** Reassembled message cap (fragmented downlink). */
+        private const val MAX_WS_MESSAGE_BYTES = 64L * 1024L * 1024L
+
         private val trustAll = object : X509TrustManager {
             override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
             override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}

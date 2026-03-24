@@ -5,10 +5,12 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import io.github.romanvht.byedpi.R
 import io.github.romanvht.byedpi.activities.MainActivity
@@ -18,488 +20,326 @@ import io.github.romanvht.byedpi.core.TProxyService
 import io.github.romanvht.byedpi.data.*
 import io.github.romanvht.byedpi.ewenloy.tgws.EwenloyTgWsServiceExtension
 import io.github.romanvht.byedpi.utility.*
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withContext
 import java.io.File
 
 class ByeDpiVpnService : LifecycleVpnService() {
     private val byeDpiProxy = ByeDpiProxy()
-    private val tgWsServiceExtension = EwenloyTgWsServiceExtension()
+    private val tgWsExt = EwenloyTgWsServiceExtension()
     private var proxyJob: Job? = null
-    private var notificationRefreshJob: Job? = null
+    private var notifyJob: Job? = null
     private var tunFd: ParcelFileDescriptor? = null
     private val mutex = Mutex()
 
-    @Volatile
-    private var userRequestedShutdown = false
+    @Volatile private var userStop = false
+
+    private val tgWsPrefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key != EwenloyTgWsServiceExtension.EWENLOY_TG_WS_MODE_KEY) return@OnSharedPreferenceChangeListener
+        if (appStatus.first != AppStatus.Running || appStatus.second != Mode.VPN) return@OnSharedPreferenceChangeListener
+        lifecycleScope.launch {
+            try {
+                mutex.withLock {
+                    if (status != ServiceStatus.Connected) return@withLock
+                    tgWsExt.refreshFromPreferences(getPreferences())
+                    try {
+                        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+                        nm.notify(FG_ID, buildNotification())
+                    } catch (_: Exception) {}
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "tgws pref sync", e)
+            }
+        }
+    }
 
     companion object {
-        private val TAG: String = ByeDpiVpnService::class.java.simpleName
-        private const val FOREGROUND_SERVICE_ID: Int = 1
-        private const val PAUSE_NOTIFICATION_ID: Int = 3
-        private const val NOTIFICATION_CHANNEL_ID: String = "ByeDPIVpn"
-
+        private const val TAG = "ByeDpiVpnService"
+        private const val FG_ID = 1
+        private const val PAUSE_ID = 3
+        private const val CH_ID = "ByeDPIVpn"
         private var status: ServiceStatus = ServiceStatus.Disconnected
     }
 
     override fun onCreate() {
         super.onCreate()
-        runCatching { tgWsServiceExtension.initialize(this, getPreferences()) }
-        registerNotificationChannel(
-            this,
-            NOTIFICATION_CHANNEL_ID,
-            R.string.vpn_channel_name,
-        )
+        try { tgWsExt.initialize(this, getPreferences()) } catch (e: Exception) { Log.e(TAG, "init", e) }
+        registerNotificationChannel(this, CH_ID, R.string.vpn_channel_name)
+        getPreferences().registerOnSharedPreferenceChangeListener(tgWsPrefListener)
     }
 
     override fun onDestroy() {
+        try { getPreferences().unregisterOnSharedPreferenceChangeListener(tgWsPrefListener) } catch (_: Exception) {}
         super.onDestroy()
-        runCatching { tunFd?.close() }
+        try { tunFd?.close() } catch (_: Exception) {}
         tunFd = null
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
 
-        try {
-            startForeground()
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to start foreground", e)
+        if (!isLifecycleValid()) {
+            Log.w(TAG, "Lifecycle destroyed, ignoring ${intent?.action}")
+            return START_NOT_STICKY
         }
 
-        return when (val action = intent?.action) {
-            START_ACTION -> {
-                lifecycleScope.launch {
-                    try { start() } catch (e: Exception) { Log.e(TAG, "start() crashed", e) }
-                }
-                START_STICKY
-            }
+        try { doStartForeground() } catch (e: Exception) { Log.e(TAG, "foreground fail", e) }
 
-            STOP_ACTION -> {
-                lifecycleScope.launch {
-                    try { stop() } catch (e: Exception) { Log.e(TAG, "stop() crashed", e) }
-                }
-                START_NOT_STICKY
+        when (intent?.action) {
+            START_ACTION -> lifecycleScope.launch { doStart() }
+            STOP_ACTION -> lifecycleScope.launch { doStop(); doFinish() }
+            RESUME_ACTION -> lifecycleScope.launch {
+                if (prepare(this@ByeDpiVpnService) == null) doStart()
             }
-
-            RESUME_ACTION -> {
-                lifecycleScope.launch {
-                    try {
-                        if (prepare(this@ByeDpiVpnService) == null) {
-                            start()
-                        }
-                    } catch (e: Exception) { Log.e(TAG, "resume() crashed", e) }
-                }
-                START_STICKY
+            PAUSE_ACTION -> lifecycleScope.launch {
+                doStop()
+                showPauseNotification()
+                doFinish()
             }
-
-            PAUSE_ACTION -> {
-                lifecycleScope.launch {
-                    try {
-                        stop()
-                        createNotificationPause()
-                    } catch (e: Exception) { Log.e(TAG, "pause() crashed", e) }
-                }
-                START_NOT_STICKY
-            }
-
-            else -> {
-                Log.w(TAG, "Unknown action: $action")
-                START_NOT_STICKY
-            }
+            else -> Log.w(TAG, "Unknown action: ${intent?.action}")
         }
+
+        return if (intent?.action in listOf(STOP_ACTION, PAUSE_ACTION))
+            START_NOT_STICKY else START_STICKY
     }
 
     override fun onRevoke() {
         Log.i(TAG, "VPN revoked")
-        lifecycleScope.launch {
-            try { stop() } catch (e: Exception) { Log.e(TAG, "onRevoke stop crashed", e) }
-        }
+        if (!isLifecycleValid()) return
+        lifecycleScope.launch { doStop(); doFinish() }
     }
 
-    private suspend fun start() {
-        Log.i(TAG, "Starting")
+    private suspend fun doStart() {
+        mutex.withLock {
+            if (status == ServiceStatus.Connected) return
 
-        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.cancel(PAUSE_NOTIFICATION_ID)
+            val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            nm.cancel(PAUSE_ID)
 
-        if (status == ServiceStatus.Connected) {
-            Log.w(TAG, "VPN already connected")
-            return
-        }
+            userStop = false
 
-        try {
-            mutex.withLock {
-                if (status == ServiceStatus.Connected) {
-                    Log.w(TAG, "VPN already connected")
-                    return@withLock
-                }
-                userRequestedShutdown = false
+            try {
                 startProxy()
                 delay(400)
-                runCatching { tgWsServiceExtension.start(getPreferences()) }
+                try { tgWsExt.start(getPreferences()) } catch (e: Exception) { Log.e(TAG, "tgws start", e) }
                 startTun2Socks()
-                startNotificationRefresh()
+                startNotifyRefresh()
                 updateStatus(ServiceStatus.Connected)
+            } catch (e: Exception) {
+                Log.e(TAG, "Start failed", e)
+                updateStatus(ServiceStatus.Failed)
+                doCleanup()
+                doFinish()
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to start VPN", e)
-            updateStatus(ServiceStatus.Failed)
-            try { stop() } catch (e2: Exception) { Log.e(TAG, "Cleanup after failed start also failed", e2) }
         }
     }
 
-    private fun startForeground() {
-        val notification: Notification = createNotification()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(
-                FOREGROUND_SERVICE_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
-            )
-        } else {
-            startForeground(FOREGROUND_SERVICE_ID, notification)
-        }
-    }
-
-    private suspend fun stop() {
-        Log.i(TAG, "Stopping")
-        userRequestedShutdown = true
-
+    private suspend fun doStop() {
+        userStop = true
         mutex.withLock {
             try {
-                withContext(Dispatchers.IO) {
-                    runCatching { tgWsServiceExtension.stop() }
-                    runCatching { stopNotificationRefresh() }
-                    runCatching { stopProxy() }
-                    runCatching { stopTun2Socks() }
-                }
+                withContext(Dispatchers.IO) { doCleanup() }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to stop VPN", e)
+                Log.e(TAG, "Cleanup error", e)
             }
             updateStatus(ServiceStatus.Disconnected)
         }
+        userStop = false
+    }
 
-        userRequestedShutdown = false
-        runCatching {
+    private fun doCleanup() {
+        try { tgWsExt.stop() } catch (e: Exception) { Log.e(TAG, "tgws stop", e) }
+        stopNotifyRefresh()
+        try { stopProxy() } catch (e: Exception) { Log.e(TAG, "proxy stop", e) }
+        try { stopTun2Socks() } catch (e: Exception) { Log.e(TAG, "tun stop", e) }
+    }
+
+    private fun doFinish() {
+        try {
             val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-            nm.cancel(FOREGROUND_SERVICE_ID)
-        }
-        runCatching {
+            nm.cancel(FG_ID)
+        } catch (_: Exception) {}
+        try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                stopForeground(Service.STOP_FOREGROUND_REMOVE)
+                stopForeground(STOP_FOREGROUND_REMOVE)
             } else {
-                @Suppress("DEPRECATION")
-                stopForeground(true)
+                @Suppress("DEPRECATION") stopForeground(true)
             }
+        } catch (_: Exception) {}
+        try { stopSelf() } catch (_: Exception) {}
+    }
+
+    private fun doStartForeground() {
+        val n = buildNotification()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(FG_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            startForeground(FG_ID, n)
         }
-        runCatching { stopSelf() }
     }
 
     private fun startProxy() {
-        Log.i(TAG, "Starting proxy")
+        proxyJob?.cancel()
+        proxyJob = null
 
-        if (proxyJob != null) {
-            Log.w(TAG, "Proxy job still alive from previous cycle, cleaning up")
-            runCatching { proxyJob?.cancel() }
-            proxyJob = null
-        }
-
-        val preferences = getByeDpiPreferences()
-
+        val preferences = ByeDpiProxyPreferences.fromSharedPreferences(getPreferences(), this)
         proxyJob = lifecycleScope.launch(Dispatchers.IO) {
             val code = try {
                 byeDpiProxy.startProxy(preferences)
-            } catch (e: CancellationException) {
+            } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.e(TAG, "ByeDPI proxy thread ended with error", e)
+                Log.e(TAG, "Proxy error", e)
                 -1
             }
-            delay(500)
-
-            if (userRequestedShutdown) {
-                return@launch
-            }
-
-            Log.w(TAG, "ByeDPI proxy exited unexpectedly (code=$code), tearing down VPN + TG WS")
+            if (userStop) return@launch
+            Log.w(TAG, "Proxy exited unexpectedly code=$code")
             withContext(Dispatchers.Main) {
-                runCatching { tgWsServiceExtension.stop() }
-                runCatching { stopNotificationRefresh() }
-                runCatching { stopTun2Socks() }
-                if (status == ServiceStatus.Connected) {
-                    if (code != 0) {
-                        updateStatus(ServiceStatus.Failed)
-                    } else {
-                        updateStatus(ServiceStatus.Disconnected)
-                    }
-                }
-                runCatching {
-                    val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-                    nm.cancel(FOREGROUND_SERVICE_ID)
-                }
-                runCatching {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                        stopForeground(Service.STOP_FOREGROUND_REMOVE)
-                    } else {
-                        @Suppress("DEPRECATION")
-                        stopForeground(true)
-                    }
-                }
-                runCatching { stopSelf() }
+                if (!isLifecycleValid()) return@withContext
+                doCleanup()
+                updateStatus(if (code != 0) ServiceStatus.Failed else ServiceStatus.Disconnected)
+                doFinish()
             }
         }
-
-        Log.i(TAG, "Proxy started")
     }
 
-    private suspend fun stopProxy() {
-        Log.i(TAG, "Stopping proxy")
-
-        if (proxyJob == null) {
-            Log.w(TAG, "Proxy job already null")
-            return
-        }
-
-        try {
-            runCatching { byeDpiProxy.stopProxy() }
-            proxyJob?.cancel()
-
-            val completed = withTimeoutOrNull(2000) {
-                proxyJob?.join()
-                true
-            }
-
-            if (completed == null) {
-                Log.w(TAG, "proxy not finish in time, cancelling...")
-                runCatching { byeDpiProxy.jniForceClose() }
-            }
-
-            proxyJob = null
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to close proxyJob", e)
-            proxyJob = null
-        }
-
-        Log.i(TAG, "Proxy stopped")
+    private fun stopProxy() {
+        if (proxyJob == null) return
+        try { byeDpiProxy.stopProxy() } catch (e: Exception) { Log.e(TAG, "JNI stop", e) }
+        proxyJob?.cancel()
+        proxyJob = null
     }
 
     private fun startTun2Socks() {
-        Log.i(TAG, "Starting tun2socks")
+        try { tunFd?.close() } catch (_: Exception) {}
+        tunFd = null
 
-        if (tunFd != null) {
-            Log.w(TAG, "tunFd still open from previous cycle, closing")
-            runCatching { tunFd?.close() }
-            tunFd = null
-        }
+        val prefs = getPreferences()
+        val (ip, port) = prefs.getProxyIpAndPort()
+        val dns = prefs.getStringNotNull("dns_ip", "8.8.8.8")
+        val ipv6 = prefs.getBoolean("ipv6_enable", false)
 
-        val sharedPreferences = getPreferences()
-        val (ip, port) = sharedPreferences.getProxyIpAndPort()
-
-        val dns = sharedPreferences.getStringNotNull("dns_ip", "8.8.8.8")
-        val ipv6 = sharedPreferences.getBoolean("ipv6_enable", false)
-
-        val tun2socksConfig = buildString {
+        val config = buildString {
             appendLine("tunnel:")
             appendLine("  mtu: 8500")
-
             appendLine("misc:")
             appendLine("  task-stack-size: 81920")
-
             appendLine("socks5:")
             appendLine("  address: $ip")
             appendLine("  port: $port")
             appendLine("  udp: udp")
         }
-
-        val configPath = try {
-            File.createTempFile("config", "tmp", cacheDir).apply {
-                writeText(tun2socksConfig)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to create config file", e)
-            throw e
-        }
-
-        val fd = createBuilder(dns, ipv6).establish()
-            ?: throw IllegalStateException("VPN connection failed")
-
-        this.tunFd = fd
-
-        TProxyService.TProxyStartService(configPath.absolutePath, fd.fd)
-
-        Log.i(TAG, "Tun2Socks started. ip: $ip port: $port")
+        val configFile = File.createTempFile("config", "tmp", cacheDir).apply { writeText(config) }
+        val fd = createBuilder(dns, ipv6).establish() ?: throw IllegalStateException("VPN establish failed")
+        tunFd = fd
+        TProxyService.TProxyStartService(configFile.absolutePath, fd.fd)
     }
 
     private fun stopTun2Socks() {
-        Log.i(TAG, "Stopping tun2socks")
-
-        runCatching { TProxyService.TProxyStopService() }
-
-        try {
-            File(cacheDir, "config.tmp").delete()
-        } catch (e: SecurityException) {
-            Log.e(TAG, "Failed to delete config file", e)
-        }
-
-        try {
-            tunFd?.close()
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to close tunFd", e)
-        } finally {
-            tunFd = null
-        }
-
-        Log.i(TAG, "Tun2socks stopped")
+        try { TProxyService.TProxyStopService() } catch (e: Exception) { Log.e(TAG, "tproxy stop", e) }
+        try { File(cacheDir, "config.tmp").delete() } catch (_: Exception) {}
+        try { tunFd?.close() } catch (_: Exception) {}
+        tunFd = null
     }
 
-    private fun getByeDpiPreferences(): ByeDpiProxyPreferences =
-        ByeDpiProxyPreferences.fromSharedPreferences(getPreferences(), this)
-
     private fun updateStatus(newStatus: ServiceStatus) {
-        Log.d(TAG, "VPN status changed from $status to $newStatus")
-
         status = newStatus
 
         setStatus(
             when (newStatus) {
                 ServiceStatus.Connected -> AppStatus.Running
-
-                ServiceStatus.Disconnected,
-                ServiceStatus.Failed -> {
-                    proxyJob = null
-                    AppStatus.Halted
+                ServiceStatus.Disconnected, ServiceStatus.Failed -> {
+                    proxyJob = null; AppStatus.Halted
                 }
             },
             Mode.VPN
         )
 
-        runCatching {
-            val intent = Intent(
-                when (newStatus) {
-                    ServiceStatus.Connected -> STARTED_BROADCAST
-                    ServiceStatus.Disconnected -> STOPPED_BROADCAST
-                    ServiceStatus.Failed -> FAILED_BROADCAST
-                }
-            )
-            intent.putExtra(SENDER, Sender.VPN.ordinal)
-            sendBroadcast(intent)
-        }
+        try {
+            sendBroadcast(Intent(when (newStatus) {
+                ServiceStatus.Connected -> STARTED_BROADCAST
+                ServiceStatus.Disconnected -> STOPPED_BROADCAST
+                ServiceStatus.Failed -> FAILED_BROADCAST
+            }).apply { putExtra(SENDER, Sender.VPN.ordinal) })
+        } catch (_: Exception) {}
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            runCatching { QuickTileService.updateTile() }
+            try { QuickTileService.updateTile() } catch (_: Exception) {}
         }
     }
 
-    private fun createNotification(): Notification =
+    private fun buildNotification(): Notification =
         createConnectionNotification(
-            this,
-            NOTIFICATION_CHANNEL_ID,
+            this, CH_ID,
             R.string.notification_title,
             R.string.vpn_notification_content,
-            tgWsServiceExtension.statusTextRes(),
+            tgWsExt.statusTextRes(),
             ByeDpiVpnService::class.java,
         )
 
-    private fun createNotificationPause() {
-        val notification = createPauseNotification(
-            this,
-            NOTIFICATION_CHANNEL_ID,
-            R.string.notification_title,
-            R.string.service_paused_text,
-            ByeDpiVpnService::class.java,
-        )
-
-        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.notify(PAUSE_NOTIFICATION_ID, notification)
+    private fun showPauseNotification() {
+        try {
+            val n = createPauseNotification(this, CH_ID,
+                R.string.notification_title, R.string.service_paused_text,
+                ByeDpiVpnService::class.java)
+            (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(PAUSE_ID, n)
+        } catch (_: Exception) {}
     }
 
-    private fun startNotificationRefresh() {
-        if (notificationRefreshJob != null) return
-        notificationRefreshJob = lifecycleScope.launch {
+    private fun startNotifyRefresh() {
+        notifyJob?.cancel()
+        notifyJob = lifecycleScope.launch {
             while (status == ServiceStatus.Connected) {
-                runCatching {
-                    val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-                    manager.notify(FOREGROUND_SERVICE_ID, createNotification())
-                }
+                try {
+                    val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+                    nm.notify(FG_ID, buildNotification())
+                } catch (_: Exception) {}
                 delay(1500)
             }
         }
     }
 
-    private fun stopNotificationRefresh() {
-        notificationRefreshJob?.cancel()
-        notificationRefreshJob = null
+    private fun stopNotifyRefresh() {
+        notifyJob?.cancel()
+        notifyJob = null
     }
 
+    private fun isLifecycleValid(): Boolean =
+        lifecycle.currentState.isAtLeast(Lifecycle.State.INITIALIZED)
+
     private fun createBuilder(dns: String, ipv6: Boolean): Builder {
-        Log.d(TAG, "DNS: $dns")
         val builder = Builder()
         builder.setSession("ByeDPI")
         builder.setConfigureIntent(
-            PendingIntent.getActivity(
-                this,
-                0,
-                Intent(this, MainActivity::class.java),
-                PendingIntent.FLAG_IMMUTABLE,
-            )
+            PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         )
+        builder.addAddress("10.10.10.10", 32).addRoute("0.0.0.0", 0)
+        if (ipv6) { builder.addAddress("fd00::1", 128).addRoute("::", 0) }
+        if (dns.isNotBlank()) { builder.addDnsServer(dns) }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) { builder.setMetered(false) }
 
-        builder.addAddress("10.10.10.10", 32)
-            .addRoute("0.0.0.0", 0)
-
-        if (ipv6) {
-            builder.addAddress("fd00::1", 128)
-                .addRoute("::", 0)
-        }
-
-        if (dns.isNotBlank()) {
-            builder.addDnsServer(dns)
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            builder.setMetered(false)
-        }
-
-        val preferences = getPreferences()
-        val listType = preferences.getStringNotNull("applist_type", "disable")
-        val listedApps = preferences.getSelectedApps()
-
+        val prefs = getPreferences()
+        val listType = prefs.getStringNotNull("applist_type", "disable")
+        val apps = prefs.getSelectedApps()
         when (listType) {
             "blacklist" -> {
-                for (packageName in listedApps) {
-                    try {
-                        builder.addDisallowedApplication(packageName)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Не удалось добавить приложение $packageName в черный список", e)
-                    }
+                for (pkg in apps) {
+                    try { builder.addDisallowedApplication(pkg) } catch (_: Exception) {}
                 }
-
                 builder.addDisallowedApplication(applicationContext.packageName)
             }
-
             "whitelist" -> {
-                for (packageName in listedApps) {
-                    try {
-                        builder.addAllowedApplication(packageName)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Не удалось добавить приложение $packageName в белый список", e)
-                    }
+                for (pkg in apps) {
+                    try { builder.addAllowedApplication(pkg) } catch (_: Exception) {}
                 }
             }
-
-            "disable" -> {
-                builder.addDisallowedApplication(applicationContext.packageName)
-            }
+            "disable" -> builder.addDisallowedApplication(applicationContext.packageName)
         }
-
         return builder
     }
 }

@@ -18,25 +18,43 @@
 
 ---
 
-## Зачем этот форк
+## Что это
+
+Два независимых прокси-сервера в одном приложении:
+- **ByeDPI** (`1080`) — обход DPI для всего трафика (как в оригинале)
+- **Telegram WS** (`1082`) — standalone прокси **только для Telegram** (работает как [tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy) от Flowseal, без промежуточного хопа через ByeDPI)
+
+Telegram WS работает автономно: подключается напрямую к WebSocket-шлюзам Telegram, при недоступности WS — прямой TCP к DC. Трафик Telegram **не проходит через ByeDPI**
 
 | Компонент | Порт | Назначение |
 |-----------|------|------------|
 | **ByeDPI** (VPN/прокси приложения) | `127.0.0.1:1080` | Весь трафик через tun2socks или внешний прокси |
-| **Telegram WS** (модуль `ewenloy.tgws`) | `127.0.0.1:1082` | SOCKS5 для Telegram: MTProto → WS к `kws*.web.telegram.org`, иначе через ByeDPI |
+| **Telegram WS** (модуль `ewenloy.tgws`) | `127.0.0.1:1082` | Standalone SOCKS5 для Telegram: MTProto → WS к `kws*.web.telegram.org`, при недоступности WS — прямое TCP к DC |
 
 Пакет приложения: `io.github.ewenloy.byedpixtg` (не пересекается с официальным ByeByeDPI).
 
-Идея WS-части — по мотивам **[tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy)** (MIT); в репозитории **нет** Python-кода Flowseal, только Kotlin-порт и [текст лицензии MIT](third-party/licenses/Flowseal-tg-ws-proxy-MIT.txt). Подробности: [NOTICE](NOTICE), [AUTHORS.md](AUTHORS.md).
+Kotlin-реализация WS-прокси написана по мотивам **[tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy)** (MIT) от Flowseal. Архитектура полностью совпадает: standalone SOCKS5, прямой WS к шлюзам Telegram, TCP fallback к DC без промежуточных хопов. Подробности: [NOTICE](NOTICE), [AUTHORS.md](AUTHORS.md).
 
 ---
 
-## Быстрый старт (Telegram + WS)
+## Как это работает
+
+```
+Весь трафик → VPN (tun2socks) → ByeDPI (:1080)
+Telegram    → SOCKS5 (:1082) → TG WS Proxy → WSS → Telegram DC
+                                            └─ TCP fallback → Telegram DC (напрямую)
+```
+
+Telegram WS прокси работает **параллельно** с ByeDPI, но **независимо** — трафик Telegram не проходит через ByeDPI.
+
+Переключатель «Ускорить Telegram через WS» можно включать **во время уже работающего VPN** — локальный SOCKS5 на `127.0.0.1:1082` поднимается или гасится без полного переподключения (как отдельный процесс у [Flowseal/tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy)). Строка в уведомлении читает тот же флаг, что и настройки, а не устаревшее состояние в памяти.
+
+## Быстрый старт
 
 1. Установить APK, один раз включить VPN и принять системный запрос.
 2. **Настройки** → категория **Telegram** → включить **«Ускорить Telegram через WS»**.
 3. Нажать **«Подключить прокси в Telegram»** — откроется ссылка с **127.0.0.1:1082**.
-4. В Telegram в прокси должен быть SOCKS5 на **1082**; остальной трафик идёт через ByeDPI на **1080** как обычно.
+4. В Telegram должен быть SOCKS5 на **1082**; остальной трафик идёт через ByeDPI на **1080** как обычно.
 
 ---
 

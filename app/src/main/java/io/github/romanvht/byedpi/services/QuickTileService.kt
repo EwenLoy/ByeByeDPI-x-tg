@@ -16,6 +16,8 @@ class QuickTileService : TileService() {
     companion object {
         private const val TAG = "QuickTileService"
         private var instance: QuickTileService? = null
+        @Volatile private var lastClickMs = 0L
+        private const val DEBOUNCE_MS = 2000L
 
         fun updateTile() {
             instance?.updateStatus()
@@ -26,22 +28,27 @@ class QuickTileService : TileService() {
 
     override fun onStartListening() {
         super.onStartListening()
-
         instance = this
         appTile = qsTile
-
         updateStatus()
     }
 
     override fun onStopListening() {
         super.onStopListening()
-
         instance = null
         appTile = null
     }
 
     override fun onClick() {
         super.onClick()
+
+        val now = System.currentTimeMillis()
+        if (now - lastClickMs < DEBOUNCE_MS) {
+            Log.d(TAG, "Tile click debounced")
+            return
+        }
+        lastClickMs = now
+
         handleClick()
     }
 
@@ -53,15 +60,12 @@ class QuickTileService : TileService() {
             AppStatus.Halted -> startService(mode)
             AppStatus.Running -> stopService()
         }
-
-        Log.i(TAG, "Tile clicked")
     }
 
     private fun startService(mode: Mode) {
         if (mode == Mode.VPN && VpnService.prepare(this) != null) {
             return
         }
-
         ServiceManager.start(this, mode)
         setState(Tile.STATE_ACTIVE)
     }
@@ -73,13 +77,10 @@ class QuickTileService : TileService() {
 
     private fun updateStatus() {
         val (status) = appStatus
-
-        val newState = when (status) {
+        setState(when (status) {
             AppStatus.Running -> Tile.STATE_ACTIVE
             AppStatus.Halted -> Tile.STATE_INACTIVE
-        }
-
-        setState(newState)
+        })
     }
 
     private fun setState(state: Int) {

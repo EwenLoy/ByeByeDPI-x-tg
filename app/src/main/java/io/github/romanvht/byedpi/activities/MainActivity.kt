@@ -368,7 +368,8 @@ class MainActivity : BaseActivity() {
                 EwenloyTgWsServiceExtension.TG_STATUS_WS -> getString(R.string.tg_ws_main_ws)
                 EwenloyTgWsServiceExtension.TG_STATUS_DIRECT -> getString(R.string.tg_ws_main_direct)
                 EwenloyTgWsServiceExtension.TG_STATUS_IDLE -> getString(R.string.tg_ws_main_idle)
-                else -> getString(R.string.tg_ws_status_disabled)
+                EwenloyTgWsServiceExtension.TG_STATUS_DISABLED -> getString(R.string.tg_ws_main_idle)
+                else -> getString(R.string.tg_ws_main_idle)
             }
             tv.visibility = View.VISIBLE
         } else {
