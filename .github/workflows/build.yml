@@ -1,4 +1,4 @@
-name: Build APK
+name: Build and Release
 
 on:
   push:
@@ -8,9 +8,12 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
-    name: Build debug APK
+    name: Build APKs and publish release
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -32,30 +35,31 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug --stacktrace
 
-      - name: Upload APK artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ByeByeDPI-x-tg-debug
-          path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
-          retention-days: 30
+      - name: Determine release tag
+        id: tag
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            PRE=false
+          else
+            VER=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts | head -n1)
+            TAG="v${VER}-build${GITHUB_RUN_NUMBER}"
+            PRE=true
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${PRE}" >> "$GITHUB_OUTPUT"
+          echo "Release tag: ${TAG}"
 
-  release:
-    name: Publish release
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Download built APKs
-        uses: actions/download-artifact@v4
-        with:
-          name: ByeByeDPI-x-tg-debug
-          path: apk
-
-      - name: Create GitHub Release
+      # Публикуем релиз сразу из этого джоба — без upload-artifact,
+      # чтобы не тратить хранилище Actions.
+      # Для pull_request релиз не создаём (только проверка сборки).
+      - name: Publish GitHub Release
+        if: github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
         with:
-          files: apk/*.apk
+          tag_name: ${{ steps.tag.outputs.tag }}
+          prerelease: ${{ steps.tag.outputs.prerelease == 'true' }}
+          files: app/build/outputs/apk/debug/*.apk
+          fail_on_unmatched_files: true
           generate_release_notes: true
