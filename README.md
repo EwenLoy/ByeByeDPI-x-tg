@@ -54,8 +54,8 @@ cd ByeByeDPI-x-tg
 
 ## Благодарности
 
-- [Flowseal/tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy) — идея и Rust-движок TG WS
-- [amurcanov/tg-ws-proxy-android](https://github.com/amurcanov/tg-ws-proxy-android) — Android-версия TG WS
+- [Flowseal/tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy) — основная идея
+- [amurcanov/tg-ws-proxy-android](https://github.com/amurcanov/tg-ws-proxy-android) — Android-версия TG WS + Rust-движок TG WS
 - [romanvht/ByeByeDPI](https://github.com/romanvht/ByeByeDPI) и оригинальный [ByeByeDPI](https://github.com/hufrea/byedpi) — обход блокировок
 
 ## Лицензия
