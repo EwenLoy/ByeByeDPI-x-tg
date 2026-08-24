@@ -201,7 +201,7 @@
     <string name="tg_ws_mode_enabled_summary">Трафик Telegram направляется через WS-туннель, остальной трафик идет через ByeDPI</string>
     <string name="tg_ws_status_ws">Telegram: WS туннель активен</string>
     <string name="tg_ws_status_direct">Telegram: прямое TCP (WS недоступен)</string>
-    <string name="tg_ws_status_idle">Telegram: WS ускорялка готова</string>
+    <string name="tg_ws_status_idle">Telegram WS: включён</string>
     <string name="tg_ws_status_disabled">Telegram WS: выключено</string>
     <string name="ewenloy_tg_runtime_status_title">Статус TG WS</string>
     <string name="test_tg_ws_button">Проверить TG WS</string>

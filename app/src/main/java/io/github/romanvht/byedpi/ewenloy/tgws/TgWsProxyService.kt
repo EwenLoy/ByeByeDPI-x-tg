@@ -85,6 +85,10 @@ class TgWsProxyService : Service() {
         val isRunning: StateFlow<Boolean> = _isRunning
         private val _isVerifiedRunning = MutableStateFlow(false)
         val isVerifiedRunning: StateFlow<Boolean> = _isVerifiedRunning
+
+        // Последняя строка трафика ("Трафик: 1.2MB · 3 сесс.") для сводки в уведомлении ByeDPI
+        private val _lastTraffic = MutableStateFlow<String?>(null)
+        val lastTraffic: StateFlow<String?> = _lastTraffic
     }
 
     override fun onCreate() {
@@ -162,6 +166,7 @@ class TgWsProxyService : Service() {
         notificationStartedAtMs = System.currentTimeMillis()
         lastNotificationContent = getString(R.string.notification_starting)
         lastNotificationAtMs = notificationStartedAtMs
+        _lastTraffic.value = null
 
         val notification = createNotification(lastNotificationContent)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -246,6 +251,7 @@ class TgWsProxyService : Service() {
                         val totalBytes = parseHumanBytes(upRaw) + parseHumanBytes(downRaw)
                         val active = activeConns.toIntOrNull() ?: 0
                         val text = getString(R.string.notification_traffic, formatBytes(totalBytes), active)
+                        _lastTraffic.value = text
                         updateNotification(text)
                     } catch (e: Exception) {
                         Log.w(TAG, "Stats update failed", e)
@@ -375,6 +381,7 @@ class TgWsProxyService : Service() {
         // поэтому уведомление гарантированно убирается
         stopScope.launch {
             updateNotification(getString(R.string.notification_stopping), force = true)
+            _lastTraffic.value = null
             requestNativeStop("stop")
             releaseWakeLock()
             updateRunningState(false)
@@ -499,7 +506,9 @@ class TgWsProxyService : Service() {
             val serviceChannel = NotificationChannel(
                 CHANNEL_ID,
                 getString(R.string.notification_channel_name),
-                NotificationManager.IMPORTANCE_LOW
+                // MIN: без иконки в статус-баре, внизу шторки — основная сводка
+                // показывается в уведомлении ByeDPI
+                NotificationManager.IMPORTANCE_MIN
             ).apply {
                 description = getString(R.string.notification_channel_description)
                 setShowBadge(false)

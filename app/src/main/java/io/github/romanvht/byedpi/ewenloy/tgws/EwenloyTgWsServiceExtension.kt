@@ -72,14 +72,22 @@ class EwenloyTgWsServiceExtension {
         Log.i(TAG, "TgWsProxyService stop requested")
     }
 
-    fun statusTextRes(): Int {
+    /**
+     * Многострочная сводка для единого уведомления ByeDPI:
+     * "Telegram: WS туннель активен\nТрафик: 1.2MB · 3 сесс."
+     */
+    fun statusLine(): String {
+        val ctx = context ?: return ""
         val prefOn = preferences?.getBoolean(EWENLOY_TG_WS_MODE_KEY, false) ?: false
-        if (!prefOn) return R.string.tg_ws_status_disabled
-        if (!TgWsProxyService.isRunning.value) return R.string.tg_ws_status_idle
-        return when (readStatus()) {
+        if (!prefOn) return ctx.getString(R.string.tg_ws_status_disabled)
+        val baseRes = when (readStatus()) {
             TG_STATUS_WS     -> R.string.tg_ws_status_ws
             TG_STATUS_DIRECT -> R.string.tg_ws_status_direct
             else             -> R.string.tg_ws_status_idle
+        }
+        return buildString {
+            append(ctx.getString(baseRes))
+            TgWsProxyService.lastTraffic.value?.let { append('\n').append(it) }
         }
     }
 

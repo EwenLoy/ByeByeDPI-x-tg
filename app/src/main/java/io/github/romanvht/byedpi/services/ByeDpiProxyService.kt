@@ -232,7 +232,7 @@ class ByeDpiProxyService : LifecycleService() {
             this, CH_ID,
             R.string.notification_title,
             R.string.proxy_notification_content,
-            tgWsExt.statusTextRes(),
+            tgWsExt.statusLine().takeIf { it.isNotBlank() },
             ByeDpiProxyService::class.java,
         )
 

@@ -282,7 +282,7 @@ class ByeDpiVpnService : LifecycleVpnService() {
             this, CH_ID,
             R.string.notification_title,
             R.string.vpn_notification_content,
-            tgWsExt.statusTextRes(),
+            tgWsExt.statusLine().takeIf { it.isNotBlank() },
             ByeDpiVpnService::class.java,
         )
 
