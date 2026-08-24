@@ -30,10 +30,10 @@ jobs:
       - name: Setup Gradle (with cache)
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build debug APKs
+      - name: Build release APKs
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace
+          ./gradlew assembleRelease --stacktrace
 
       - name: Determine release tag
         id: tag
@@ -60,6 +60,6 @@ jobs:
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           prerelease: ${{ steps.tag.outputs.prerelease == 'true' }}
-          files: app/build/outputs/apk/debug/*.apk
+          files: app/build/outputs/apk/release/*.apk
           fail_on_unmatched_files: true
           generate_release_notes: true
