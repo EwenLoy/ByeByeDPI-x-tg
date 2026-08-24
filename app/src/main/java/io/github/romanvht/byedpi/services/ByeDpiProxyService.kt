@@ -137,7 +137,8 @@ class ByeDpiProxyService : LifecycleService() {
     }
 
     private fun doCleanup() {
-        try { tgWsExt.stop() } catch (e: Exception) { Log.e(TAG, "tgws stop", e) }
+        // TG WS прокси независим от основного сервиса: НЕ глушим его здесь.
+        // Раньше тут был tgWsExt.stop() — из-за него TG WS падал вместе с ByeDPI.
         stopNotifyRefresh()
         try { stopProxy() } catch (e: Exception) { Log.e(TAG, "proxy stop", e) }
     }

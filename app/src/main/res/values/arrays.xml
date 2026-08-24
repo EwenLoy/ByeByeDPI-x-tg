@@ -67,4 +67,17 @@
         <item name="blacklist">blacklist</item>
         <item name="whitelist">whitelist</item>
     </array>
+
+    <string-array name="tg_ws_pool_sizes">
+        <item>2</item>
+        <item>4</item>
+        <item>6</item>
+        <item>8</item>
+    </string-array>
+    <string-array name="tg_ws_pool_size_values">
+        <item>2</item>
+        <item>4</item>
+        <item>6</item>
+        <item>8</item>
+    </string-array>
 </resources>

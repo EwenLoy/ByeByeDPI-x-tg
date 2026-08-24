@@ -1,110 +1,63 @@
-<div align="center">
-<img width="200" height="200" alt="iconapp" src="https://github.com/user-attachments/assets/5fe6b110-04ec-4b2b-8891-e73307cb556f" alt="Логотип ByeDPI" width="200" />
+# ByeByeDPI x TG
 
+Приложение для Android, которое помогает открывать Telegram и сайты, заблокированные провайдером.
 
-# ByeByeDPI-x-tg
+Внутри два инструмента:
 
-**Android-приложение:** обход DPI через ByeDPI + опционально ускорение Telegram через WebSocket-туннель.
+1. **ByeDPI** — обход блокировок сайтов (VPN или локальный прокси).
+2. **TG WS Proxy** — отдельный прокси только для Telegram: трафик мессенджера идёт через защищённое WebSocket-соединение (Cloudflare), поэтому мессенджер часто оживает даже там, где обычный прокси не спасает.
 
-Форк **[ByeByeDPI](https://github.com/romanvht/ByeByeDPI)** · автор доработок **[EwenLoy](https://github.com/EwenLoy)** · репозиторий: **https://github.com/EwenLoy/ByeByeDPI-x-tg**
-
-Русский
-
-[![Release](https://img.shields.io/github/v/release/EwenLoy/ByeByeDPI-x-tg?label=release)](https://github.com/EwenLoy/ByeByeDPI-x-tg/releases/latest)
-[![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
-[![Upstream](https://img.shields.io/badge/upstream-ByeByeDPI-orange)](https://github.com/romanvht/ByeByeDPI)
-
-</div>
-
----
-
-## Что это
-
-Два независимых прокси-сервера в одном приложении:
-- **ByeDPI** (`1080`) — обход DPI для всего трафика (как в оригинале)
-- **Telegram WS** (`1082`) — standalone прокси **только для Telegram** (работает как [tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy) от Flowseal, без промежуточного хопа через ByeDPI)
-
-Telegram WS работает автономно: подключается напрямую к WebSocket-шлюзам Telegram, при недоступности WS — прямой TCP к DC. Трафик Telegram **не проходит через ByeDPI**
-
-| Компонент | Порт | Назначение |
-|-----------|------|------------|
-| **ByeDPI** (VPN/прокси приложения) | `127.0.0.1:1080` | Весь трафик через tun2socks или внешний прокси |
-| **Telegram WS** (модуль `ewenloy.tgws`) | `127.0.0.1:1082` | Standalone SOCKS5 для Telegram: MTProto → WS к `kws*.web.telegram.org`, при недоступности WS — прямое TCP к DC |
-
-Пакет приложения: `io.github.ewenloy.byedpixtg` (не пересекается с официальным ByeByeDPI).
-
-Kotlin-реализация WS-прокси написана по мотивам **[tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy)** (MIT) от Flowseal. Архитектура полностью совпадает: standalone SOCKS5, прямой WS к шлюзам Telegram, TCP fallback к DC без промежуточных хопов. Подробности: [NOTICE](NOTICE), [AUTHORS.md](AUTHORS.md).
-
----
-
-## Как это работает
-
-```
-Весь трафик → VPN (tun2socks) → ByeDPI (:1080)
-Telegram    → SOCKS5 (:1082) → TG WS Proxy → WSS → Telegram DC
-                                            └─ TCP fallback → Telegram DC (напрямую)
-```
-
-Telegram WS прокси работает **параллельно** с ByeDPI, но **независимо** — трафик Telegram не проходит через ByeDPI.
-
-Переключатель «Ускорить Telegram через WS» можно включать **во время уже работающего VPN** — локальный SOCKS5 на `127.0.0.1:1082` поднимается или гасится без полного переподключения (как отдельный процесс у [Flowseal/tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy)). Строка в уведомлении читает тот же флаг, что и настройки, а не устаревшее состояние в памяти.
+Оба инструмента работают независимо: можно включить только TG WS, только ByeDPI или оба сразу.
 
 ## Быстрый старт
 
-1. Установить APK, один раз включить VPN и принять системный запрос.
-2. **Настройки** → категория **Telegram** → включить **«Ускорить Telegram через WS»**.
-3. Нажать **«Подключить прокси в Telegram»** — откроется ссылка с **127.0.0.1:1082**.
-4. В Telegram должен быть SOCKS5 на **1082**; остальной трафик идёт через ByeDPI на **1080** как обычно.
+1. [Скачайте APK](https://github.com/EwenLoy/ByeByeDPI-x-tg/releases) и установите его (разрешите установку из неизвестных источников).
+2. Откройте приложение и нажмите большую кнопку — запустится ByeDPI.
+3. Для Telegram: включите зелёный переключатель **TG WS**, затем нажмите «Применить в Telegram» и подтвердите прокси в мессенджере.
 
----
+Готово. Статус обоих инструментов виден на главном экране, там же кнопка теста.
 
-## Возможности
+## Как работает TG WS
 
-- Telegram WS mode, диагностика, статус на главном экране и в уведомлении.
-- Автозапуск после загрузки (`BOOT_COMPLETED`) и после разблокировки (`USER_UNLOCKED`), см. настройки.
-- Всё наследие upstream: редактор стратегий, списки приложений, режим Proxy/VPN, тесты и т.д.
+```
+Telegram → 127.0.0.1:1082 (MTProto) → движок на Rust → WebSocket/TLS → Telegram
+```
 
-Приложение **не** является классическим VPN-сервисом с удалённым сервером: трафик обрабатывается **локально** (см. [документацию ByeDPI](https://github.com/hufrea/byedpi/blob/v0.13/README.md)).
+- Приложение поднимает на телефоне локальный MTProto-прокси (порт `1082`).
+- Нативный движок на Rust принимает трафик Telegram и пересылает его к серверам Telegram через WebSocket с шифрованием — при необходимости через Cloudflare.
+- Ссылка вида `tg://proxy?server=127.0.0.1&port=1082&secret=dd...` добавляется в ваш Telegram-клиент одной кнопкой.
 
----
+Поддерживаются клиенты: Telegram, AyuGram, Plus Messenger, NekoGram, ExtremeGram и другие форки.
+
+## Если что-то не работает
+
+- **Telegram не подключается**: включите TG WS и нажмите «Проверить TG WS» в меню теста — приложение покажет, что именно сломалось (сервис, порт, ядро, доступ к серверу).
+- **Нужны подробности**: меню ⋮ → «Логи TG WS» — там живые логи движка, можно поделиться ими.
+- **Сайты не открываются**: попробуйте сменить режим VPN/Proxy в настройках или другую стратегию в тесте.
+- **Приложение выгрузили из памяти**: сервисы перезапускаются сами; если нет — включите игнорирование оптимизации батареи (предложится при первом запуске).
+
+Требования: Android 5.0+. Для работы TG WS нужен телефон на ARM (все реальные устройства); на эмуляторах x86 TG WS недоступен.
 
 ## Сборка из исходников
 
-Репозиторий содержит **только Android-проект** + сабмодули `byedpi` и `hev-socks5-tunnel` (см. `.gitmodules`). Python tg-ws-proxy сюда не клонируется.
+**Автоматически:** при каждом пуше GitHub Actions собирает APK — вкладка [Actions](https://github.com/EwenLoy/ByeByeDPI-x-tg/actions), артефакт `ByeByeDPI-x-tg-debug`. Пуш тега `v*` создаёт Release.
 
+**Локально:**
 ```bash
-git clone --recurse-submodules https://github.com/EwenLoy/ByeByeDPI-x-tg.git
+git clone https://github.com/EwenLoy/ByeByeDPI-x-tg.git
 cd ByeByeDPI-x-tg
+./gradlew assembleDebug
+# APK: app/build/outputs/apk/debug/
 ```
 
-В `local.properties` укажите `sdk.dir=...` (файл в `.gitignore`).
+Нужны JDK 17 и Android SDK (NDK скачается сам). Готовые `.so` движка лежат в репозитории (`app/src/main/tglibs/`), собирать Rust отдельно не требуется.
 
-```bash
-# Windows (PowerShell)
-.\gradlew.bat assembleRelease "-Pandroid.overridePathCheck=true"
-```
+## Благодарности
 
-APK: `app/build/outputs/apk/release/` (per-ABI и universal). Релиз по умолчанию **без вашей подписи** — подпишите своим keystore для установки поверх или для распространения.
+- [Flowseal/tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy) — идея и Rust-движок TG WS
+- [amurcanov/tg-ws-proxy-android](https://github.com/amurcanov/tg-ws-proxy-android) — Android-версия TG WS
+- [romanvht/ByeByeDPI](https://github.com/romanvht/ByeByeDPI) и оригинальный [ByeByeDPI](https://github.com/hufrea/byedpi) — обход блокировок
 
-> Сборка нативной части под Windows может потребовать WSL или корректный NDK — как у оригинального ByeByeDPI.
+## Лицензия
 
----
-
-## AdGuard и прочее
-
-Режим **прокси** ByeByeDPI-x-tg: в AdGuard указать SOCKS5 `127.0.0.1:1080`. Telegram при этом настраивается **отдельно** на `1082`, если включён WS mode. Подробнее у сообщества: [ByeByeDPI-Manual](https://github.com/BDManual/ByeByeDPI-Manual).
-
----
-
-## Лицензии
-
-- Проект как целое: **GPL-3.0** ([LICENSE](LICENSE)), производное от ByeByeDPI.
-- Атрибуция Flowseal (MIT): [third-party/licenses/Flowseal-tg-ws-proxy-MIT.txt](third-party/licenses/Flowseal-tg-ws-proxy-MIT.txt).
-
----
-
-## Зависимости (upstream)
-
-- [ByeDPI](https://github.com/hufrea/byedpi)  
-- [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel)  
-- Цепочка форков: [ByeDPIAndroid](https://github.com/dovecoteescapee/ByeDPIAndroid) → [ByeByeDPI](https://github.com/romanvht/ByeByeDPI) → **ByeByeDPI-x-tg**
+GPLv3 — см. [LICENSE](LICENSE).

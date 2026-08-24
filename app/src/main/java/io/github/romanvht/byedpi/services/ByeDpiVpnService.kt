@@ -35,6 +35,7 @@ class ByeDpiVpnService : LifecycleVpnService() {
     private var proxyJob: Job? = null
     private var notifyJob: Job? = null
     private var tunFd: ParcelFileDescriptor? = null
+    private var tunConfigFile: java.io.File? = null
     private val mutex = Mutex()
 
     @Volatile private var userStop = false
@@ -153,7 +154,8 @@ class ByeDpiVpnService : LifecycleVpnService() {
     }
 
     private fun doCleanup() {
-        try { tgWsExt.stop() } catch (e: Exception) { Log.e(TAG, "tgws stop", e) }
+        // TG WS прокси независим от основного сервиса: НЕ глушим его здесь.
+        // Раньше тут был tgWsExt.stop() — из-за него TG WS падал вместе с ByeDPI.
         stopNotifyRefresh()
         try { stopProxy() } catch (e: Exception) { Log.e(TAG, "proxy stop", e) }
         try { stopTun2Socks() } catch (e: Exception) { Log.e(TAG, "tun stop", e) }
@@ -235,6 +237,7 @@ class ByeDpiVpnService : LifecycleVpnService() {
             appendLine("  udp: udp")
         }
         val configFile = File.createTempFile("config", "tmp", cacheDir).apply { writeText(config) }
+        tunConfigFile = configFile
         val fd = createBuilder(dns, ipv6).establish() ?: throw IllegalStateException("VPN establish failed")
         tunFd = fd
         TProxyService.TProxyStartService(configFile.absolutePath, fd.fd)
@@ -242,7 +245,8 @@ class ByeDpiVpnService : LifecycleVpnService() {
 
     private fun stopTun2Socks() {
         try { TProxyService.TProxyStopService() } catch (e: Exception) { Log.e(TAG, "tproxy stop", e) }
-        try { File(cacheDir, "config.tmp").delete() } catch (_: Exception) {}
+        try { tunConfigFile?.delete() } catch (_: Exception) {}
+        tunConfigFile = null
         try { tunFd?.close() } catch (_: Exception) {}
         tunFd = null
     }

@@ -54,7 +54,11 @@ lint/intermediates/
 # Profiling / heap dumps
 *.hprof
 
+# Rust build output (tg-ws-proxy-rs)
+third-party/tg-ws-proxy-rs/target/
+
 # Local notes / scratch (not for GitHub)
+TODO.md
 sbox.md
 *.private.md
 .env

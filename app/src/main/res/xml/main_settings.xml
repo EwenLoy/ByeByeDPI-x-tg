@@ -14,6 +14,31 @@
             android:summary="@string/tg_ws_mode_enabled_summary"
             android:defaultValue="false" />
 
+        <SwitchPreference
+            android:key="tg_ws_cf_enabled"
+            android:icon="@drawable/ic_cloud"
+            android:title="@string/tg_ws_cf_enabled_title"
+            android:summary="@string/tg_ws_cf_enabled_summary"
+            android:defaultValue="true"
+            android:dependency="ewenloy_tg_ws_mode_enabled" />
+
+        <ListPreference
+            android:key="tg_ws_pool_size"
+            android:icon="@drawable/ic_pool"
+            android:title="@string/tg_ws_pool_size_title"
+            android:summary="@string/tg_ws_pool_size_summary"
+            android:entries="@array/tg_ws_pool_sizes"
+            android:entryValues="@array/tg_ws_pool_size_values"
+            android:defaultValue="4"
+            android:dependency="ewenloy_tg_ws_mode_enabled" />
+
+        <Preference
+            android:key="tg_ws_secret_key"
+            android:icon="@drawable/ic_key"
+            android:title="@string/tg_ws_secret_title"
+            android:summary="@string/tg_ws_secret_summary"
+            android:dependency="ewenloy_tg_ws_mode_enabled" />
+
         <Preference
             android:key="ewenloy_tg_open_proxy_link"
             android:icon="@drawable/ic_telegram"

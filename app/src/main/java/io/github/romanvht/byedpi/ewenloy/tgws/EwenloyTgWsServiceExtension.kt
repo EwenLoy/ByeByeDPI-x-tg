@@ -1,19 +1,26 @@
 package io.github.romanvht.byedpi.ewenloy.tgws
 
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import io.github.romanvht.byedpi.R
 
+/**
+ * Bridge between ByeDPI services and TgWsProxyService.
+ * Mirrors ProxyController from tg-ws-proxy-android — starts/stops via Intent.
+ */
 class EwenloyTgWsServiceExtension {
+
     private var initialized = false
     private var enabled = false
-    @Volatile private var running = false
-    private var proxyServer: EwenloyTgWsProxyServer? = null
     private var preferences: SharedPreferences? = null
+    private var context: Context? = null
 
     fun initialize(context: Context, preferences: SharedPreferences) {
+        this.context = context
         this.preferences = preferences
         enabled = preferences.getBoolean(EWENLOY_TG_WS_MODE_KEY, false)
         initialized = true
@@ -23,97 +30,129 @@ class EwenloyTgWsServiceExtension {
         if (!initialized) return
         this.preferences = preferences
         enabled = preferences.getBoolean(EWENLOY_TG_WS_MODE_KEY, false)
-        if (!enabled) {
-            writeStatus(TG_STATUS_DISABLED)
-            return
-        }
-        if (running) return
-        val server = EwenloyTgWsProxyServer(
-            host = "127.0.0.1",
-            listenPort = TG_WS_PORT,
-            onRouteStatus = { status -> writeStatusIfChanged(status) },
-            onStats = { },
+        if (!enabled) { writeStatus(TG_STATUS_DISABLED); return }
+
+        val ctx = context ?: return
+        val secret = ensureSecret(preferences)
+        val poolSize = preferences.getString(PREF_POOL_SIZE, DEFAULT_POOL_SIZE.toString())?.toIntOrNull() ?: DEFAULT_POOL_SIZE
+        val cfEnabled = preferences.getBoolean(PREF_CF_ENABLED, true)
+        val cfDomain = if (cfEnabled) (preferences.getString(PREF_CF_DOMAIN, "") ?: "") else ""
+        val dcIps = buildDcIps(preferences)
+
+        ContextCompat.startForegroundService(ctx,
+            Intent(ctx, TgWsProxyService::class.java).apply {
+                action = TgWsProxyService.ACTION_START
+                putExtra(TgWsProxyService.EXTRA_BIND_IP, "127.0.0.1")
+                putExtra(TgWsProxyService.EXTRA_PORT, TG_WS_PORT)
+                putExtra(TgWsProxyService.EXTRA_IPS, dcIps)
+                putExtra(TgWsProxyService.EXTRA_POOL_SIZE, poolSize)
+                putExtra(TgWsProxyService.EXTRA_CFPROXY_ENABLED, cfEnabled)
+                putExtra(TgWsProxyService.EXTRA_CFPROXY_PRIORITY, true)
+                putExtra(TgWsProxyService.EXTRA_CFPROXY_DOMAIN, cfDomain)
+                putExtra(TgWsProxyService.EXTRA_SECRET_KEY, secret)
+            }
         )
-        server.start()
-        if (!server.isRunning()) {
-            Log.e(TAG, "TG WS proxy failed to bind 127.0.0.1:$TG_WS_PORT")
-            proxyServer = null
-            running = false
-            // Do not clear user's toggle in prefs — only runtime status
-            writeStatus(TG_STATUS_DISABLED)
-            return
-        }
-        proxyServer = server
-        running = true
-        writeStatus(TG_STATUS_IDLE)
-        server.warmup()
+        Log.i(TAG, "TgWsProxyService start requested on port $TG_WS_PORT")
     }
 
-    /**
-     * When user toggles «Ускорить Telegram через WS» while VPN/Proxy is already running,
-     * start or stop the SOCKS5 on :1082 without full reconnect (same idea as Flowseal tray).
-     */
     fun refreshFromPreferences(preferences: SharedPreferences) {
         if (!initialized) return
         this.preferences = preferences
-        enabled = preferences.getBoolean(EWENLOY_TG_WS_MODE_KEY, false)
-        if (!enabled) {
-            if (running) stop()
-            return
-        }
-        if (running) return
-        start(preferences)
+        val nowEnabled = preferences.getBoolean(EWENLOY_TG_WS_MODE_KEY, false)
+        if (!nowEnabled) { if (isRunning()) stop(); return }
+        if (!isRunning()) start(preferences) else stop().also { start(preferences) }
     }
 
     fun stop() {
-        try { proxyServer?.stop() } catch (e: Exception) { Log.e(TAG, "proxy stop", e) }
-        proxyServer = null
-        running = false
+        val ctx = context ?: return
+        ctx.startService(Intent(ctx, TgWsProxyService::class.java).apply {
+            action = TgWsProxyService.ACTION_STOP
+        })
         writeStatus(TG_STATUS_DISABLED)
+        Log.i(TAG, "TgWsProxyService stop requested")
     }
 
-    /**
-     * Shade + notification: always read toggle from prefs (memory `enabled` lags behind Settings).
-     */
     fun statusTextRes(): Int {
         val prefOn = preferences?.getBoolean(EWENLOY_TG_WS_MODE_KEY, false) ?: false
         if (!prefOn) return R.string.tg_ws_status_disabled
-        if (!running) return R.string.tg_ws_status_idle
-        val status = readStatus()
-        return when (status) {
-            TG_STATUS_WS -> R.string.tg_ws_status_ws
+        if (!TgWsProxyService.isRunning.value) return R.string.tg_ws_status_idle
+        return when (readStatus()) {
+            TG_STATUS_WS     -> R.string.tg_ws_status_ws
             TG_STATUS_DIRECT -> R.string.tg_ws_status_direct
-            TG_STATUS_IDLE -> R.string.tg_ws_status_idle
-            TG_STATUS_DISABLED -> R.string.tg_ws_status_idle
-            else -> R.string.tg_ws_status_idle
+            else             -> R.string.tg_ws_status_idle
         }
     }
 
-    fun isEnabled(): Boolean = enabled
-    fun isRunning(): Boolean = running
+    fun isEnabled() = enabled
+    fun isRunning() = TgWsProxyService.isRunning.value
 
-    private fun readStatus(): String =
-        preferences?.getString(EWENLOY_TG_RUNTIME_STATUS_KEY, TG_STATUS_DISABLED) ?: TG_STATUS_DISABLED
+    // ---- helpers ----
 
-    private fun writeStatus(status: String) {
-        try { preferences?.edit(commit = true) { putString(EWENLOY_TG_RUNTIME_STATUS_KEY, status) } }
-        catch (_: Exception) {}
+    private fun ensureSecret(prefs: SharedPreferences): String {
+        val existing = prefs.getString(PREF_SECRET_KEY, "")?.trim() ?: ""
+        if (existing.length == 32 && existing.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' })
+            return existing
+        val generated = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }
+            .joinToString("") { "%02x".format(it) }
+        prefs.edit(commit = true) { putString(PREF_SECRET_KEY, generated) }
+        Log.i(TAG, "Generated new MTProto secret")
+        return generated
     }
 
-    private fun writeStatusIfChanged(status: String) {
-        if (readStatus() == status) return
-        writeStatus(status)
+    private fun buildDcIps(prefs: SharedPreferences): String {
+        if (prefs.getBoolean(PREF_CF_ENABLED, true)) return ""
+        val isExp = prefs.getBoolean(PREF_EXPERIMENTAL_MODE, false)
+        return buildList {
+            appendDc(1, prefs.getString(PREF_DC1, "") ?: "")
+            appendDc(2, prefs.getString(PREF_DC2, "") ?: "")
+            appendDc(3, prefs.getString(PREF_DC3, "") ?: "")
+            appendDc(4, prefs.getString(PREF_DC4, "") ?: "")
+            if (isExp) {
+                appendDc(5,    prefs.getString(PREF_DC5, "") ?: "")
+                appendDc(203,  prefs.getString(PREF_DC203, "") ?: "")
+                appendDc(-1,   prefs.getString(PREF_DC1M, "") ?: "")
+                appendDc(-2,   prefs.getString(PREF_DC2M, "") ?: "")
+                appendDc(-3,   prefs.getString(PREF_DC3M, "") ?: "")
+                appendDc(-4,   prefs.getString(PREF_DC4M, "") ?: "")
+                appendDc(-5,   prefs.getString(PREF_DC5M, "") ?: "")
+                appendDc(-203, prefs.getString(PREF_DC203M, "") ?: "")
+            }
+        }.joinToString(",")
     }
+
+    private fun MutableList<String>.appendDc(dc: Int, value: String) {
+        val ip = value.trim(); if (ip.isNotBlank()) add("$dc:$ip")
+    }
+
+    private fun readStatus() = preferences?.getString(EWENLOY_TG_RUNTIME_STATUS_KEY, TG_STATUS_DISABLED) ?: TG_STATUS_DISABLED
+    private fun writeStatus(s: String) { preferences?.edit(commit = true) { putString(EWENLOY_TG_RUNTIME_STATUS_KEY, s) } }
 
     companion object {
         private const val TAG = "EwenloyTgWsExt"
         const val TG_WS_PORT = 1082
-        const val EWENLOY_TG_WS_MODE_KEY = "ewenloy_tg_ws_mode_enabled"
+
+        const val EWENLOY_TG_WS_MODE_KEY       = "ewenloy_tg_ws_mode_enabled"
         const val EWENLOY_TG_RUNTIME_STATUS_KEY = "ewenloy_tg_runtime_status"
+        const val EWENLOY_TG_DIAGNOSTICS_KEY    = "ewenloy_tg_diagnostics"
+        const val EWENLOY_TG_SECRET_KEY         = "tg_ws_secret_key"
+
+        const val PREF_SECRET_KEY        = "tg_ws_secret_key"
+        const val PREF_POOL_SIZE         = "tg_ws_pool_size"
+        const val PREF_CF_ENABLED        = "tg_ws_cf_enabled"
+        const val PREF_CF_DOMAIN         = "tg_ws_cf_domain"
+        const val PREF_EXPERIMENTAL_MODE = "tg_ws_experimental_mode"
+        const val PREF_DC1   = "tg_ws_dc1";  const val PREF_DC2   = "tg_ws_dc2"
+        const val PREF_DC3   = "tg_ws_dc3";  const val PREF_DC4   = "tg_ws_dc4"
+        const val PREF_DC5   = "tg_ws_dc5";  const val PREF_DC203 = "tg_ws_dc203"
+        const val PREF_DC1M  = "tg_ws_dc1m"; const val PREF_DC2M  = "tg_ws_dc2m"
+        const val PREF_DC3M  = "tg_ws_dc3m"; const val PREF_DC4M  = "tg_ws_dc4m"
+        const val PREF_DC5M  = "tg_ws_dc5m"; const val PREF_DC203M = "tg_ws_dc203m"
+
         const val TG_STATUS_DISABLED = "disabled"
-        const val TG_STATUS_IDLE = "idle"
-        const val TG_STATUS_WS = "ws"
-        const val TG_STATUS_DIRECT = "direct"
-        const val EWENLOY_TG_DIAGNOSTICS_KEY = "ewenloy_tg_diagnostics"
+        const val TG_STATUS_IDLE     = "idle"
+        const val TG_STATUS_WS       = "ws"
+        const val TG_STATUS_DIRECT   = "direct"
+
+        private const val DEFAULT_POOL_SIZE = 4
     }
 }
