@@ -14,6 +14,15 @@ permissions:
 jobs:
   build:
     name: Build APKs and publish release
+    # Явный скип: не собирать, если в сообщении коммита есть [skip ci]/[ci skip]/[skip actions].
+    # Нативная поддержка GitHub работает только для пуша в ветку — теги и workflow_dispatch она не покрывает.
+    if: >-
+      github.event_name != 'push' ||
+      !(
+        contains(github.event.head_commit.message, '[skip ci]') ||
+        contains(github.event.head_commit.message, '[ci skip]') ||
+        contains(github.event.head_commit.message, '[skip actions]')
+      )
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
