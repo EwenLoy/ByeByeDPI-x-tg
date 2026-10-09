@@ -1,0 +1,58 @@
+/* Внешний вид в духе Android-версии ByeByeDPI x tg */
+
+.power-button {
+  min-width: 200px;
+  min-height: 200px;
+  padding: 0;
+  border-radius: 9999px;
+  background-color: #3b6189;
+  color: #ffffff;
+  box-shadow: 0 8px 22px alpha(black, 0.28);
+  transition: background-color 200ms ease, box-shadow 200ms ease;
+}
+.power-button:hover { background-color: #456e98; }
+.power-button:active { background-color: #34567a; }
+.power-button.on {
+  background-color: #2e7d5b;
+  box-shadow: 0 0 0 8px alpha(#2e7d5b, 0.22), 0 8px 22px alpha(black, 0.28);
+}
+.power-button.on:hover { background-color: #348d67; }
+.power-button.busy { opacity: 0.7; }
+.power-button image { color: #ffffff; }
+
+.status-title { font-size: 20px; }
+.status-address { font-size: 16px; opacity: 0.75; }
+
+.message { font-size: 13px; }
+.message.error { color: @error_color; }
+.message.ok { color: @success_color; }
+.message.wait { color: @warning_color; }
+
+.tile {
+  border-radius: 22px;
+  padding: 14px 10px;
+  min-height: 92px;
+  background-color: alpha(#3b6189, 0.09);
+  box-shadow: 0 1px 3px alpha(black, 0.18);
+}
+.tile:hover { background-color: alpha(#3b6189, 0.16); }
+.tile image { color: #3b6189; }
+.tile label { font-size: 15px; }
+.tile.active { background-color: #3b6189; color: #ffffff; }
+.tile.active:hover { background-color: #456e98; }
+.tile.active image { color: #ffffff; }
+.tile.attention { box-shadow: 0 0 0 2px @warning_color, 0 1px 3px alpha(black, 0.18); }
+
+.result-card {
+  border-radius: 16px;
+  padding: 14px 16px;
+  background-color: alpha(#3b6189, 0.07);
+}
+.result-card progressbar trough,
+.result-card progressbar progress { min-height: 6px; }
+.result-count { font-weight: bold; font-size: 16px; }
+
+.pill-wide { min-width: 240px; }
+.mono { font-family: monospace; }
+.log-view { font-family: monospace; font-size: 12px; }
+.cmd-view { font-family: monospace; padding: 10px; }
