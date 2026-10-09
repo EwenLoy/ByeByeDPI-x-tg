@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=ByeByeDPI x tg
+GenericName=DPI bypass
+Comment=Обход DPI (ByeDPI) и прокси для Telegram
+Comment[en]=DPI bypass (ByeDPI) and Telegram proxy
+Exec=byebyedpi-tg
+Icon=com.github.ewenloy.ByeByeDPI
+Terminal=false
+Categories=Network;Utility;
+Keywords=DPI;proxy;socks;telegram;byedpi;
+StartupNotify=true
+StartupWMClass=com.github.ewenloy.ByeByeDPI
+SingleMainWindow=true

@@ -1,0 +1,6 @@
+/* Подстройки для тёмной темы */
+.tile { background-color: alpha(#8fb4dc, 0.10); }
+.tile:hover { background-color: alpha(#8fb4dc, 0.17); }
+.tile image { color: #a9c8ea; }
+.tile.active { background-color: #3b6189; }
+.result-card { background-color: alpha(#8fb4dc, 0.08); }

@@ -1,0 +1,6 @@
+# Python-зависимостей из PyPI нет — используются системные пакеты Fedora:
+#   sudo dnf install -y python3 python3-gobject gtk4 libadwaita curl
+# Для сборки движков (linux/build.sh):
+#   sudo dnf install -y git gcc make cargo rust
+#
+# Минимальные версии: Python 3.10, GTK 4.10, libadwaita 1.4 (Fedora 39+).

@@ -1,0 +1,47 @@
+name: Linux (Fedora)
+
+on:
+  push:
+    paths: ["linux/**", "third-party/tg-ws-proxy-rs/**", ".github/workflows/linux.yml"]
+  pull_request:
+    paths: ["linux/**", "third-party/tg-ws-proxy-rs/**", ".github/workflows/linux.yml"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - name: Install build dependencies
+        run: dnf install -y git gcc make cargo rust binutils python3 python3-gobject gtk4 libadwaita tar
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Mark repo as safe
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Build engines
+        run: ./linux/build.sh
+
+      - name: Check Python sources
+        run: |
+          python3 -m py_compile linux/*.py
+          python3 -c "import gi; gi.require_version('Gtk','4.0'); gi.require_version('Adw','1'); from gi.repository import Adw; print('libadwaita', Adw.get_major_version(), Adw.get_minor_version())"
+
+      - name: Smoke test ciadpi
+        run: |
+          linux/dist/ciadpi --ip 127.0.0.1 --port 10801 & pid=$!
+          sleep 1 && kill -0 "$pid" && kill "$pid"
+
+      - name: Package
+        run: |
+          mkdir -p pkg/byebyedpi-tg-linux
+          cp -r linux/*.py linux/*.css linux/*.sh linux/*.desktop linux/icons linux/dist linux/README.md pkg/byebyedpi-tg-linux/
+          tar -C pkg -czf byebyedpi-tg-linux-x86_64.tar.gz byebyedpi-tg-linux
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: byebyedpi-tg-linux-x86_64
+          path: byebyedpi-tg-linux-x86_64.tar.gz
