@@ -13,12 +13,12 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "io.github.romanvht.byedpi"
+        applicationId = "io.github.ewenloy.byedpixtg"
         minSdk = 21
         //noinspection OldTargetApi
         targetSdk = 34
-        versionCode = 1820
-        versionName = "1.8.2"
+        versionCode = 20
+        versionName = "2.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -32,12 +32,22 @@ android {
         viewBinding = true
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = file("release.keystore")
+            storePassword = "byedpixtg"
+            keyAlias = "byedpixtg"
+            keyPassword = "byedpixtg"
+        }
+    }
+
     buildTypes {
         release {
             buildConfigField("String", "VERSION_NAME",  "\"${defaultConfig.versionName}\"")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             isMinifyEnabled = true
             isShrinkResources = true
+            signingConfig = signingConfigs.getByName("release")
         }
         debug {
             buildConfigField("String", "VERSION_NAME",  "\"${defaultConfig.versionName}-debug\"")
@@ -52,6 +62,15 @@ android {
     kotlin {
         compilerOptions {
             jvmTarget.set(JvmTarget.JVM_1_8)
+        }
+    }
+
+    sourceSets {
+        getByName("main") {
+            // tglibs — prebuilt libtgwsproxy.so (Rust MTProto WS ядро).
+            // Отдельная папка обязательна: runNdkBuild пишет в NDK_LIBS_OUT=src/main/jniLibs
+            // и очищает её при каждой сборке, удаляя чужие .so.
+            jniLibs.srcDirs("src/main/jniLibs", "src/main/tglibs")
         }
     }
 
@@ -89,6 +108,10 @@ dependencies {
     implementation("androidx.preference:preference-ktx:1.2.1")
     implementation("com.google.android.material:material:1.13.0")
     implementation("com.google.code.gson:gson:2.14.0")
+    // JNA for libtgwsproxy.so (Rust MTProto proxy)
+    implementation("net.java.dev.jna:jna:5.14.0@aar")
+    // DataStore for TG WS proxy settings
+    implementation("androidx.datastore:datastore-preferences:1.1.1")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
