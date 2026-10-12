@@ -100,7 +100,7 @@ cd ByeByeDPI-x-tg
 
 <br>
 
-**Сайты:** [hufrea/byedpi](https://github.com/hufrea/byedpi) (ядро) → [romanvht/ByeByeDPI](https://github.com/romanvht/ByeByeDPI) (Android-обёртка) → **этот форк**
+**Сайты:** [hufrea/byedpi](https://github.com/hufrea/byedpi) (ядро) → [romanvht/ByeByeDPI](https://github.com/romanvht/ByeByeDPI) (Android-обёртка) → **этот форк** (текущая база — ByeByeDPI **1.8.2**, ядро byedpi `ba53229`)
 
 **Telegram:** идея — [Flowseal/tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy), Android-версия с Rust-движком — [amurcanov/tg-ws-proxy-android](https://github.com/amurcanov/tg-ws-proxy-android) → интегрировано в этот форк
 
