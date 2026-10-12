@@ -10,6 +10,7 @@ import android.os.IBinder
 import android.os.Process
 import io.github.romanvht.byedpi.R
 import io.github.romanvht.byedpi.data.*
+import io.github.romanvht.byedpi.ewenloy.tgws.EwenloyTgWsServiceExtension
 import io.github.romanvht.byedpi.receiver.ServiceActionReceiver
 import io.github.romanvht.byedpi.utility.*
 
@@ -20,11 +21,14 @@ class ByeDpiProxyService : Service() {
         private const val NOTIFICATION_CHANNEL_ID = "ByeDPI Proxy"
     }
 
+    private val tgWsExt = EwenloyTgWsServiceExtension()
+
     private val session by lazy { NativeSession(this) }
 
     override fun onCreate() {
         super.onCreate()
         registerNotificationChannel(this, NOTIFICATION_CHANNEL_ID, R.string.proxy_channel_name)
+        tgWsExt.initialize(this, getPreferences())
     }
 
     override fun onDestroy() {
@@ -79,6 +83,7 @@ class ByeDpiProxyService : Service() {
             R.string.notification_title,
             R.string.proxy_notification_content,
             Mode.Proxy,
+            tgWsExt.statusLine().takeIf { it.isNotBlank() },
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(FOREGROUND_SERVICE_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)

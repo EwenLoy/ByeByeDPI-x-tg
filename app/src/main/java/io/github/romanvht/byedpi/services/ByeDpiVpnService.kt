@@ -15,6 +15,7 @@ import android.util.Log
 import io.github.romanvht.byedpi.R
 import io.github.romanvht.byedpi.activities.MainActivity
 import io.github.romanvht.byedpi.data.*
+import io.github.romanvht.byedpi.ewenloy.tgws.EwenloyTgWsServiceExtension
 import io.github.romanvht.byedpi.receiver.ServiceActionReceiver
 import io.github.romanvht.byedpi.utility.*
 
@@ -27,11 +28,14 @@ class ByeDpiVpnService : VpnService() {
         private const val TAG = "ByeDpiVpnService"
     }
 
+    private val tgWsExt = EwenloyTgWsServiceExtension()
+
     private val session by lazy { NativeSession(this, ::createTunnel) }
 
     override fun onCreate() {
         super.onCreate()
         registerNotificationChannel(this, NOTIFICATION_CHANNEL_ID, R.string.vpn_channel_name)
+        tgWsExt.initialize(this, getPreferences())
     }
 
     override fun onDestroy() {
@@ -87,6 +91,7 @@ class ByeDpiVpnService : VpnService() {
             R.string.notification_title,
             R.string.vpn_notification_content,
             Mode.VPN,
+            tgWsExt.statusLine().takeIf { it.isNotBlank() },
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(FOREGROUND_SERVICE_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED)
