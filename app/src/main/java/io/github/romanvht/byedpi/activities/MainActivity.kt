@@ -27,6 +27,8 @@ import androidx.lifecycle.lifecycleScope
 import io.github.romanvht.byedpi.R
 import io.github.romanvht.byedpi.data.*
 import io.github.romanvht.byedpi.databinding.ActivityMainBinding
+import io.github.romanvht.byedpi.ewenloy.tgws.EwenloyTgWsServiceExtension
+import io.github.romanvht.byedpi.ewenloy.tgws.TgWsProxyService
 import io.github.romanvht.byedpi.services.ServiceManager
 import io.github.romanvht.byedpi.services.TestService
 import io.github.romanvht.byedpi.services.appStatus
@@ -39,6 +41,16 @@ import kotlin.system.exitProcess
 class MainActivity : BaseActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var historyUtils: HistoryUtils
+    private val tgWsExt = EwenloyTgWsServiceExtension()
+    private val tgWsStatusHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val tgWsStatusUpdater = object : Runnable {
+        override fun run() {
+            if (isFinishing) return
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && isDestroyed) return
+            updateTgWsStatus()
+            tgWsStatusHandler.postDelayed(this, 1500)
+        }
+    }
 
     companion object {
         private val TAG: String = MainActivity::class.java.simpleName
@@ -150,7 +162,11 @@ class MainActivity : BaseActivity() {
         setContentView(binding.root)
         setupToolbar()
 
+        tgWsExt.initialize(this, getPreferences())
+
         historyUtils = HistoryUtils(this)
+
+        tgWsExt.initialize(this, getPreferences())
 
         val intentFilter = IntentFilter().apply {
             addAction(STARTED_BROADCAST)
@@ -168,15 +184,19 @@ class MainActivity : BaseActivity() {
         binding.statusButtonCard.setOnClickListener {
             binding.statusButtonCard.isClickable = false
 
-            val (status, _) = appStatus
-            when (status) {
-                AppStatus.Halted -> start()
-                AppStatus.Running -> stop()
+            try {
+                val (status, _) = appStatus
+                when (status) {
+                    AppStatus.Halted -> start()
+                    AppStatus.Running -> stop()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Button click error", e)
             }
 
             binding.statusButtonCard.postDelayed({
                 binding.statusButtonCard.isClickable = true
-            }, 1000)
+            }, 3000)
         }
 
         binding.statusButtonCard.setOnFocusChangeListener { _, hasFocus ->
@@ -220,10 +240,90 @@ class MainActivity : BaseActivity() {
             startActivity(Intent(this, TestActivity::class.java))
         }
 
+        // Тап по статус-строке TG WS — открыть логи прокси
+        binding.tgWsStatusText?.setOnClickListener {
+            startActivity(Intent(this, TgWsLogsActivity::class.java))
+        }
+
+        binding.tgProxyButton?.setOnClickListener {
+            val prefs = getPreferences()
+            val tgWsEnabled = prefs.getBoolean(EwenloyTgWsServiceExtension.EWENLOY_TG_WS_MODE_KEY, false)
+            if (tgWsEnabled) {
+                val port = EwenloyTgWsServiceExtension.TG_WS_PORT
+                val secretKey = prefs.getString(EwenloyTgWsServiceExtension.PREF_SECRET_KEY, "") ?: ""
+                val secret = if (secretKey.isEmpty()) "00000000000000000000000000000000" else secretKey
+                val url = "https://t.me/proxy?server=127.0.0.1&port=$port&secret=dd$secret"
+                applyToTelegramPackages(url)
+            } else {
+                val port = prefs.getString("byedpi_proxy_port", "1080") ?: "1080"
+                val tgUri = android.net.Uri.parse("tg://socks?server=127.0.0.1&port=$port")
+                startActivity(Intent(Intent.ACTION_VIEW, tgUri))
+            }
+        }
+
+        binding.tgWsToggleButton?.setOnClickListener {
+            val prefs = getPreferences()
+            val current = prefs.getBoolean(EwenloyTgWsServiceExtension.EWENLOY_TG_WS_MODE_KEY, false)
+            prefs.edit().putBoolean(EwenloyTgWsServiceExtension.EWENLOY_TG_WS_MODE_KEY, !current).apply()
+            updateTgWsToggleButton()
+            // Независимое управление: TG WS прокси стартует/останавливается сам,
+            // независимо от состояния основного ByeDPI-сервиса
+            tgWsExt.initialize(this, prefs)
+            if (!current) {
+                tgWsExt.start(prefs)
+                Toast.makeText(this, R.string.tg_ws_toggle_btn, Toast.LENGTH_SHORT).show()
+            } else {
+                tgWsExt.stop()
+            }
+            // Если основной сервис запущен — перезапускаем, чтобы он обновил
+            // маршрутизацию и статус в своём уведомлении
+            if (appStatus.first == AppStatus.Running) {
+                ServiceManager.restart(this, getPreferences().mode())
+                Toast.makeText(this, R.string.service_restart, Toast.LENGTH_SHORT).show()
+            }
+        }
+
         binding.domainListsButton.setOnClickListener {
             val intent = Intent(this, TestSettingsActivity::class.java)
             intent.putExtra("open_fragment", "domain_lists")
             startActivity(intent)
+        }
+
+        // Тап по статус-строке TG WS — открыть логи прокси
+        binding.tgWsStatusText.setOnClickListener {
+            startActivity(Intent(this, TgWsLogsActivity::class.java))
+        }
+
+        binding.tgProxyButton.setOnClickListener {
+            val prefs = getPreferences()
+            val tgWsEnabled = prefs.getBoolean(EwenloyTgWsServiceExtension.EWENLOY_TG_WS_MODE_KEY, false)
+            if (tgWsEnabled) {
+                val port = EwenloyTgWsServiceExtension.TG_WS_PORT
+                val secretKey = prefs.getString(EwenloyTgWsServiceExtension.PREF_SECRET_KEY, "") ?: ""
+                val secret = if (secretKey.isEmpty()) "00000000000000000000000000000000" else secretKey
+                val url = "https://t.me/proxy?server=127.0.0.1&port=$port&secret=dd$secret"
+                applyToTelegramPackages(url)
+            } else {
+                val port = prefs.getString("byedpi_proxy_port", "1080") ?: "1080"
+                val tgUri = android.net.Uri.parse("tg://socks?server=127.0.0.1&port=$port")
+                startActivity(Intent(Intent.ACTION_VIEW, tgUri))
+            }
+        }
+
+        binding.tgWsToggleButton.setOnClickListener {
+            val prefs = getPreferences()
+            val current = prefs.getBoolean(EwenloyTgWsServiceExtension.EWENLOY_TG_WS_MODE_KEY, false)
+            prefs.edit().putBoolean(EwenloyTgWsServiceExtension.EWENLOY_TG_WS_MODE_KEY, !current).apply()
+            updateTgWsToggleButton()
+            // Независимое управление: TG WS прокси стартует/останавливается сам,
+            // независимо от состояния основного ByeDPI-сервиса
+            tgWsExt.initialize(this, prefs)
+            if (!current) {
+                tgWsExt.start(prefs)
+                Toast.makeText(this, R.string.tg_ws_toggle_btn, Toast.LENGTH_SHORT).show()
+            } else {
+                tgWsExt.stop()
+            }
         }
 
         binding.strategyButton.setOnClickListener {
@@ -249,10 +349,18 @@ class MainActivity : BaseActivity() {
         ServiceManager.refresh(this)
         updateStatus()
         updateStrategyButton()
+        updateTgWsToggleButton()
+        tgWsStatusHandler.post(tgWsStatusUpdater)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        tgWsStatusHandler.removeCallbacks(tgWsStatusUpdater)
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        tgWsStatusHandler.removeCallbacks(tgWsStatusUpdater)
         unregisterReceiver(receiver)
     }
 
@@ -285,6 +393,16 @@ class MainActivity : BaseActivity() {
                 intent.putExtra(FileActivity.EXTRA_MODE, FileActivity.MODE_CREATE)
                 intent.putExtra(FileActivity.EXTRA_TYPE, FileActivity.TYPE_LOGS)
                 logsRegister.launch(intent)
+                true
+            }
+
+            R.id.action_tg_ws_logs -> {
+                startActivity(Intent(this, TgWsLogsActivity::class.java))
+                true
+            }
+
+            R.id.action_tg_ws_logs -> {
+                startActivity(Intent(this, TgWsLogsActivity::class.java))
                 true
             }
 
@@ -528,6 +646,83 @@ class MainActivity : BaseActivity() {
         if (!alreadyRequested && !PermissionUtils.isBatteryOptimizationDisabled(this)) {
             PermissionUtils.requestBatteryOptimization(this)
             preferences.edit { putBoolean(BATTERY_OPTIMIZATION_REQUESTED, true) }
+        }
+    }
+
+    private fun updateTgWsStatus() {
+        val prefs = getPreferences()
+        val enabled = prefs.getBoolean(EwenloyTgWsServiceExtension.EWENLOY_TG_WS_MODE_KEY, false)
+
+        val tv = binding.tgWsStatusText
+        if (enabled) {
+            // TG WS прокси работает независимо от основного сервиса
+            if (!TgWsProxyService.isRunning.value &&
+                prefs.getString(
+                    EwenloyTgWsServiceExtension.EWENLOY_TG_RUNTIME_STATUS_KEY,
+                    EwenloyTgWsServiceExtension.TG_STATUS_DISABLED
+                ) == EwenloyTgWsServiceExtension.TG_STATUS_DISABLED
+            ) {
+                tv.text = getString(R.string.tg_ws_main_idle)
+            } else {
+                val tgStatus = prefs.getString(
+                    EwenloyTgWsServiceExtension.EWENLOY_TG_RUNTIME_STATUS_KEY,
+                    EwenloyTgWsServiceExtension.TG_STATUS_DISABLED
+                ) ?: EwenloyTgWsServiceExtension.TG_STATUS_DISABLED
+
+                tv.text = when (tgStatus) {
+                    EwenloyTgWsServiceExtension.TG_STATUS_WS -> getString(R.string.tg_ws_main_ws)
+                    EwenloyTgWsServiceExtension.TG_STATUS_DIRECT -> getString(R.string.tg_ws_main_direct)
+                    EwenloyTgWsServiceExtension.TG_STATUS_IDLE -> getString(R.string.tg_ws_main_idle)
+                    else -> getString(R.string.tg_ws_main_idle)
+                }
+            }
+            tv.visibility = View.VISIBLE
+        } else {
+            tv.visibility = View.GONE
+        }
+    }
+
+    private fun updateTgWsToggleButton() {
+        val enabled = getPreferences().getBoolean(EwenloyTgWsServiceExtension.EWENLOY_TG_WS_MODE_KEY, false)
+        val btn = binding.tgWsToggleButton
+        val icon = binding.tgWsToggleIcon
+        if (enabled) {
+            btn.setCardBackgroundColor(ContextCompat.getColor(this, R.color.green_active))
+            icon.setColorFilter(ContextCompat.getColor(this, android.R.color.white))
+        } else {
+            val typedValue = android.util.TypedValue()
+            theme.resolveAttribute(com.google.android.material.R.attr.colorSurface, typedValue, true)
+            btn.setCardBackgroundColor(typedValue.data)
+            icon.clearColorFilter()
+        }
+    }
+
+    private fun applyToTelegramPackages(url: String) {
+        val packages = listOf(
+            "org.telegram.messenger", "com.radolyn.ayugram", "com.exteragram.messenger",
+            "org.telegram.plus", "ir.ilmili.telegraph", "org.telegram.BifToGram",
+            "tw.nekomimi.nekogram", "xyz.nextalone.nagram", "uz.unnarsx.cherrygram",
+            "org.telegram.mdgram", "org.forkclient.messenger.beta", "app.nicegram",
+            "top.qwq2333.nullgram", "com.iMe.android", "ru.dahl.messenger",
+            "com.scriptsaz.litegram", "org.thunderdog.challegram"
+        )
+        val pm = packageManager
+        val available = packages.filter {
+            pm.getLaunchIntentForPackage(it) != null
+        }
+        if (available.isEmpty()) {
+            Toast.makeText(this, R.string.ewenloy_tg_open_proxy_error, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val intents = available.map { pkg ->
+            Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).apply { setPackage(pkg) }
+        }
+        if (intents.size == 1) {
+            startActivity(intents.first().addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } else {
+            val chooser = Intent.createChooser(intents.first(), getString(R.string.ewenloy_tg_choose_client))
+            chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, intents.drop(1).toTypedArray())
+            startActivity(chooser)
         }
     }
 }

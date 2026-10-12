@@ -41,12 +41,17 @@ fun createConnectionNotification(
     @StringRes title: Int,
     @StringRes content: Int,
     mode: Mode,
-): Notification =
-    NotificationCompat.Builder(context, channelId)
+    statusLine: String? = null,
+): Notification {
+    val baseText = context.getString(content)
+    val bigText = if (!statusLine.isNullOrBlank()) "$baseText\n$statusLine" else baseText
+    return NotificationCompat.Builder(context, channelId)
         .setSmallIcon(R.drawable.ic_notification)
         .setSilent(true)
         .setContentTitle(context.getString(title))
-        .setContentText(context.getString(content))
+        .setContentText(baseText)
+        // Развёрнутая шторка показывает и режим, и строку Telegram WS с трафиком
+        .setStyle(NotificationCompat.BigTextStyle().bigText(bigText))
         .addAction(0, context.getString(R.string.service_pause_btn),
             PendingIntent.getBroadcast(
                 context,
@@ -76,6 +81,7 @@ fun createConnectionNotification(
             )
         )
         .build()
+}
 
 fun createPauseNotification(
     context: Context,

@@ -199,6 +199,87 @@
 
         </LinearLayout>
 
+        <!-- Row 3: TG WS Toggle + Apply to Telegram -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="8dp">
+
+            <!-- TG WS On/Off button -->
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/tg_ws_toggle_button"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginEnd="4dp"
+                android:clickable="true"
+                android:focusable="true"
+                android:foreground="?attr/selectableItemBackground"
+                app:cardCornerRadius="12dp"
+                app:strokeWidth="0dp">
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:gravity="center"
+                    android:padding="12dp"
+                    tools:ignore="UseCompoundDrawables">
+                    <ImageView
+                        android:id="@+id/tg_ws_toggle_icon"
+                        android:layout_width="28dp"
+                        android:layout_height="28dp"
+                        android:src="@drawable/ic_toggle"
+                        android:contentDescription="@string/tg_ws_toggle_btn"
+                        app:tint="?attr/colorPrimary" />
+                    <TextView
+                        android:id="@+id/tg_ws_toggle_label"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:text="@string/tg_ws_toggle_btn"
+                        android:textSize="13sp"
+                        android:textColor="?android:textColorPrimary" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- Apply proxy to Telegram -->
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/tg_proxy_button"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="4dp"
+                android:clickable="true"
+                android:focusable="true"
+                android:foreground="?attr/selectableItemBackground"
+                app:cardCornerRadius="12dp"
+                app:strokeWidth="0dp">
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:gravity="center"
+                    android:padding="12dp"
+                    tools:ignore="UseCompoundDrawables">
+                    <ImageView
+                        android:layout_width="28dp"
+                        android:layout_height="28dp"
+                        android:src="@drawable/ic_telegram"
+                        android:contentDescription="@string/ewenloy_tg_open_proxy_title"
+                        app:tint="?attr/colorPrimary" />
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:text="@string/ewenloy_tg_open_proxy_title"
+                        android:textSize="13sp"
+                        android:textColor="?android:textColorPrimary" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+        </LinearLayout>
+
     </LinearLayout>
 
     <FrameLayout
@@ -253,6 +334,16 @@
                 android:textSize="14sp"
                 android:textColor="?android:textColorSecondary"
                 tools:text="127.0.0.1:1080" />
+
+            <com.google.android.material.textview.MaterialTextView
+                android:id="@+id/tg_ws_status_text"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textSize="13sp"
+                android:textColor="?android:textColorSecondary"
+                android:visibility="gone"
+                tools:text="TG WS: готова | :1082" />
 
             <com.google.android.material.card.MaterialCardView
                 android:id="@+id/strategy_button"
