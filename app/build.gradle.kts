@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
 
 plugins {
     id("com.android.application")
@@ -6,6 +7,22 @@ plugins {
 }
 
 val abis = setOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+
+// Release signing: secrets come from CI environment variables or local.properties.
+// The keystore itself must NOT be committed to the repository.
+val localProperties = Properties().apply {
+    val propertiesFile = rootProject.file("local.properties")
+    if (propertiesFile.exists()) propertiesFile.inputStream().use { load(it) }
+}
+
+fun signingSecret(name: String): String? = System.getenv(name) ?: localProperties.getProperty(name)
+
+val releaseKeystoreFile = file(signingSecret("KEYSTORE_FILE") ?: "release.keystore")
+val releaseKeystorePassword = signingSecret("KEYSTORE_PASSWORD")
+val releaseKeyAlias = signingSecret("KEY_ALIAS")
+val releaseKeyPassword = signingSecret("KEY_PASSWORD")
+val releaseSigningReady = releaseKeystoreFile.exists() &&
+        releaseKeystorePassword != null && releaseKeyAlias != null && releaseKeyPassword != null
 
 android {
     namespace = "io.github.romanvht.byedpi"
@@ -34,10 +51,12 @@ android {
 
     signingConfigs {
         create("release") {
-            storeFile = file("release.keystore")
-            storePassword = "byedpixtg"
-            keyAlias = "byedpixtg"
-            keyPassword = "byedpixtg"
+            if (releaseSigningReady) {
+                storeFile = releaseKeystoreFile
+                storePassword = releaseKeystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
         }
     }
 
@@ -47,7 +66,11 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = signingConfigs.getByName("release")
+            if (releaseSigningReady) {
+                signingConfig = signingConfigs.getByName("release")
+            } else {
+                println("WARNING: release signing is not configured; the release APK will be UNSIGNED (set KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD and provide the keystore file)")
+            }
         }
         debug {
             buildConfigField("String", "VERSION_NAME",  "\"${defaultConfig.versionName}-debug\"")

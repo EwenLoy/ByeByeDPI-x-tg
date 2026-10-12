@@ -35,7 +35,6 @@ app/src/main/jniLibs/
 # Signing secrets (never commit)
 *.jks
 *.keystore
-!app/release.keystore
 keystore.properties
 signing.properties
 
