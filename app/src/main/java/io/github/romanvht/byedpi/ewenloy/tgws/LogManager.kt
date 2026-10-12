@@ -8,7 +8,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.Channel.Factory.BUFFERED
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -47,17 +46,21 @@ object LogManager {
             launch {
                 val pendingBatch = mutableListOf<LogEntry>()
                 while (isActive) {
-                    var received = logChannel.tryReceive()
-                    while (received.isSuccess) {
-                        pendingBatch.add(received.getOrThrow())
-                        if (pendingBatch.size >= 20) break
-                        received = logChannel.tryReceive()
+                    // Suspend until a line arrives: no periodic wakeups while idle
+                    val first = try {
+                        logChannel.receive()
+                    } catch (_: kotlinx.coroutines.CancellationException) {
+                        break
+                    } catch (_: Exception) {
+                        continue
                     }
-                    if (pendingBatch.isNotEmpty()) {
-                        logs.value = applyBatch(logs.value, pendingBatch)
-                        pendingBatch.clear()
+                    pendingBatch.add(first)
+                    while (pendingBatch.size < 20) {
+                        val next = logChannel.tryReceive()
+                        if (next.isSuccess) pendingBatch.add(next.getOrThrow()) else break
                     }
-                    delay(150)
+                    logs.value = applyBatch(logs.value, pendingBatch)
+                    pendingBatch.clear()
                 }
             }
             readerJob.join()

@@ -72,9 +72,11 @@ class TgWsProxyService : Service() {
         private const val WAKELOCK_TIMEOUT_MS = 30L * 60 * 1000
         private const val WAKELOCK_REFRESH_MS = 25L * 60 * 1000
 
-        // Stats/notification update interval
-        private const val STATS_UPDATE_MS = 3_000L
-        private const val NOTIFICATION_MIN_UPDATE_MS = 3_000L
+        // Stats/notification update interval.
+        // Relaxed on purpose: each tick runs while a partial wakelock is held,
+        // so 10s keeps the traffic info fresh without draining the battery.
+        private const val STATS_UPDATE_MS = 10_000L
+        private const val NOTIFICATION_MIN_UPDATE_MS = 10_000L
         private const val NATIVE_STOP_WAIT_MS = 3_000L
 
         // Авто-рестарт натива при неожиданном падении/неудачном старте
