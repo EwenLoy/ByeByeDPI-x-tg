@@ -10,6 +10,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import io.github.romanvht.byedpi.data.Mode
+import io.github.romanvht.byedpi.ewenloy.tgws.EwenloyTgWsServiceExtension
 import io.github.romanvht.byedpi.services.ServiceManager
 import io.github.romanvht.byedpi.utility.getPreferences
 import io.github.romanvht.byedpi.utility.mode
@@ -48,6 +49,14 @@ class BootReceiver : BroadcastReceiver() {
     private fun tryAutostart(context: Context, reason: String) {
         runCatching {
             val preferences = context.getPreferences()
+
+            // TG WS стартует независимо от ByeDPI-сервиса, если тумблер включён
+            if (preferences.getBoolean(EwenloyTgWsServiceExtension.EWENLOY_TG_WS_MODE_KEY, false)) {
+                Log.i(TAG, "Autostart TG WS ($reason)")
+                EwenloyTgWsServiceExtension().apply { initialize(context, preferences) }
+                    .start(preferences)
+            }
+
             if (!preferences.getBoolean("autostart", false)) return
 
             when (preferences.mode()) {

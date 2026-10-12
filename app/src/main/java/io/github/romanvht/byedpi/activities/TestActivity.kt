@@ -24,6 +24,9 @@ import io.github.romanvht.byedpi.data.AppStatus
 import io.github.romanvht.byedpi.data.Mode
 import io.github.romanvht.byedpi.data.StrategyResult
 import io.github.romanvht.byedpi.data.TestState
+import io.github.romanvht.byedpi.ewenloy.tgws.EwenloyTgWsServiceExtension
+import io.github.romanvht.byedpi.ewenloy.tgws.NativeProxy
+import io.github.romanvht.byedpi.ewenloy.tgws.TgWsProxyService
 import io.github.romanvht.byedpi.services.ServiceManager
 import io.github.romanvht.byedpi.services.TestService
 import io.github.romanvht.byedpi.services.appStatus
@@ -33,6 +36,8 @@ import io.github.romanvht.byedpi.utility.mode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.net.InetSocketAddress
+import java.net.Socket
 
 class TestActivity : BaseActivity() {
 
@@ -40,6 +45,7 @@ class TestActivity : BaseActivity() {
     private lateinit var progressTextView: TextView
     private lateinit var disclaimerTextView: TextView
     private lateinit var startStopButton: MaterialButton
+    private lateinit var checkTgWsButton: MaterialButton
     private lateinit var strategyAdapter: StrategyResultAdapter
     private lateinit var cmdHistoryUtils: HistoryUtils
 
@@ -57,6 +63,7 @@ class TestActivity : BaseActivity() {
         cmdHistoryUtils = HistoryUtils(this)
         strategiesRecyclerView = findViewById(R.id.strategiesRecyclerView)
         startStopButton = findViewById(R.id.startStopButton)
+        checkTgWsButton = findViewById(R.id.checkTgWsButton)
         progressTextView = findViewById(R.id.progressTextView)
         disclaimerTextView = findViewById(R.id.disclaimerTextView)
 
@@ -92,6 +99,97 @@ class TestActivity : BaseActivity() {
                 startStopButton.strokeColor = ColorStateList.valueOf(android.graphics.Color.argb(100, 0, 0, 0))
             } else {
                 startStopButton.strokeWidth = 0
+            }
+        }
+
+        checkTgWsButton.setOnClickListener {
+            lifecycleScope.launch {
+                checkTgWsButton.isEnabled = false
+                val report = StringBuilder()
+
+                // 1) Сервис TG WS запущен?
+                val serviceRunning = TgWsProxyService.isRunning.value
+                report.append(
+                    getString(
+                        if (serviceRunning) R.string.test_tg_ws_service_on
+                        else R.string.test_tg_ws_service_off
+                    )
+                ).append('\n')
+
+                // 2) Слушается ли локальный порт прокси?
+                val tgPort = EwenloyTgWsServiceExtension.TG_WS_PORT
+                val localOk = withContext(Dispatchers.IO) {
+                    isHostReachable("127.0.0.1", tgPort, 3000)
+                }
+                report.append(
+                    getString(
+                        if (localOk) R.string.test_tg_ws_port_ok
+                        else R.string.test_tg_ws_port_fail,
+                        tgPort
+                    )
+                ).append('\n')
+
+                // 3) Тип протокола на локальном порту: MTProto или SOCKS5?
+                // Ядро — MTProto-прокси: ждёт 64-байтный obfuscated2-handshake.
+                // Шлём SOCKS5-greeting (0x05 0x01 0x00):
+                //   ответ 0x05       -> это SOCKS5-сервер (не то, что нужно)
+                //   таймаут/закрытие -> MTProto listener (ожидаемо)
+                val protoResult = if (localOk) withContext(Dispatchers.IO) {
+                    detectProxyProtocol("127.0.0.1", tgPort)
+                } else PROTO_UNKNOWN
+                report.append(
+                    when (protoResult) {
+                        PROTO_MTPROTO -> getString(R.string.test_tg_ws_proto_ok, tgPort)
+                        PROTO_SOCKS5 -> getString(R.string.test_tg_ws_proto_socks, tgPort)
+                        else -> getString(R.string.test_tg_ws_proto_unknown, tgPort)
+                    }
+                ).append('\n')
+
+                // 4) Живое ли нативное ядро (.so) и корректный ли секрет?
+                val coreOk = withContext(Dispatchers.IO) {
+                    try {
+                        val s = NativeProxy.getSecretWithPrefix()
+                        if (s != null && s.startsWith("dd") && s.length == 34) {
+                            report.append(getString(R.string.test_tg_ws_secret_ok, s.take(10)))
+                                .append('\n')
+                            true
+                        } else {
+                            report.append(getString(R.string.test_tg_ws_secret_fail, "bad secret"))
+                                .append('\n')
+                            false
+                        }
+                    } catch (t: Throwable) {
+                        report.append(
+                            getString(
+                                R.string.test_tg_ws_secret_fail,
+                                t.message ?: t.javaClass.simpleName
+                            )
+                        ).append('\n')
+                        false
+                    }
+                }
+
+                // 5) Доступен ли удалённый WS-сервер Telegram (без прокси)?
+                val host = "kws1.web.telegram.org"
+                val remoteOk = withContext(Dispatchers.IO) {
+                    isHostReachable(host, 443, 4000)
+                }
+                report.append(
+                    getString(
+                        if (remoteOk) R.string.test_tg_ws_remote_ok
+                        else R.string.test_tg_ws_remote_fail,
+                        host
+                    )
+                )
+
+                progressTextView.text = report.toString()
+                val summary = if (serviceRunning && localOk && protoResult == PROTO_MTPROTO && coreOk) {
+                    getString(R.string.tg_ws_main_ws)
+                } else {
+                    getString(R.string.test_tg_ws_service_off)
+                }
+                Toast.makeText(this@TestActivity, summary, Toast.LENGTH_SHORT).show()
+                checkTgWsButton.isEnabled = true
             }
         }
 
@@ -228,5 +326,48 @@ class TestActivity : BaseActivity() {
         clipboard.setPrimaryClip(clip)
 
         Toast.makeText(this, R.string.toast_copied, Toast.LENGTH_SHORT).show()
+    }
+
+    private companion object {
+        const val PROTO_MTPROTO = 0
+        const val PROTO_SOCKS5 = 1
+        const val PROTO_UNKNOWN = 2
+    }
+
+    /**
+     * Определяет тип прокси на локальном порту.
+     * MTProto-прокси (tgwsproxy) ждёт 64-байтный obfuscated2-handshake и молчит
+     * на чужие данные. SOCKS5-сервер ответил бы 0x05 на greeting 0x05 0x01 0x00.
+     */
+    private fun detectProxyProtocol(host: String, port: Int): Int {
+        return try {
+            Socket().use { socket ->
+                socket.connect(InetSocketAddress(host, port), 3000)
+                socket.soTimeout = 2500
+                val out = socket.getOutputStream()
+                out.write(byteArrayOf(0x05, 0x01, 0x00)) // SOCKS5 greeting
+                out.flush()
+                when (val first = socket.getInputStream().read()) {
+                    0x05 -> PROTO_SOCKS5          // ответил как SOCKS5 — не то
+                    -1 -> PROTO_MTPROTO           // сразу закрыл — поведение MTProto
+                    else -> PROTO_UNKNOWN         // неизвестный ответ
+                }
+            }
+        } catch (_: java.net.SocketTimeoutException) {
+            PROTO_MTPROTO // молчит, ждёт 64-байтный handshake — это MTProto
+        } catch (_: Exception) {
+            PROTO_UNKNOWN // соединение сброшено или иная ошибка
+        }
+    }
+
+    private fun isHostReachable(host: String, port: Int, timeoutMs: Int): Boolean {
+        return try {
+            Socket().use { socket ->
+                socket.connect(InetSocketAddress(host, port), timeoutMs)
+                true
+            }
+        } catch (_: Exception) {
+            false
+        }
     }
 }

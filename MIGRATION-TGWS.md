@@ -16,7 +16,7 @@
 - [x] 0.3 Remote `ewenloy` добавлен, fetch (main + теги v1.0.0…v1.0.1-build5)
 - [x] 0.4 Merge-base проверен = `0dd7a98` (v1.7.3+1)
 - [x] 0.5 Референсные патчи форка сохранены: `%TEMP%\bbd_cmp\fork_patch\*.patch`
-- [ ] 0.6 `local.properties` с `sdk.dir` — для локальной сборки (или скопировать из старого форка)
+- [x] 0.6 `local.properties` с `sdk.dir` — создан для локальной сборки
 - [ ] 0.7 Решить, куда пушим (ветка `tgws-v2` в ewenloy или замена `main`) — в конце
 
 ## Фаза 1 — Merge: авто-часть (проверка)
@@ -54,25 +54,25 @@
 - [x] 3.4 `EwenloyTgWsServiceExtension` совместим с новыми API (подтверждено компиляцией)
 - [x] 3.5 `TgWsProxyService`/`LogManager`/`NativeProxy` компилируются на новой базе
 - [x] 3.6 «Меню ⋮ → Логи TG WS» + обработчик в новой MainActivity
-- [ ] 3.7 Бут-автозапуск TG WS в `BootReceiver` (сейчас стартует только BBD)
+- [x] 3.7 Бут-автозапуск TG WS в `BootReceiver` (стартует независимо от BBD при включённом тумблере)
 - [ ] 3.8 QS-плитка: как в форке; фича issue #14 («BBD + TG WS одной плиткой») — отдельным шагом
-- [ ] 3.9 Блок «Проверить TG WS» в TestActivity (кнопка в layout есть, код не перенесён)
-- [ ] 3.10 Единое уведомление: проброс `statusLine` в `createConnectionNotification` из сервисов
-- [ ] 3.11 Рантайм-проверка: статусы на главном, логи TG WS, диагностика, секрет
+- [x] 3.9 Блок «Проверить TG WS» в TestActivity (порт из форка: сервис, порт, протокол, секрет, удалённый хост)
+- [x] 3.10 Единое уведомление: `statusLine` проброшен в `createConnectionNotification` из ByeDpiVpnService/ByeDpiProxyService
+- [ ] 3.11 Рантайм-проверка: статусы на главном, логи TG WS, диагностика, секрет (нужен девайс)
 
 ## Фаза 4 — Сборка и проверка
 - [x] 4.1 `gradlew :app:compileDebugKotlin -x runNdkBuild` — BUILD SUCCESSFUL (34 c)
 - [x] 4.2 `gradlew :app:assembleDebug` — BUILD SUCCESSFUL (4 мин); APK: 5 split'ов + universal (8.4–11 МБ)
-- [ ] 4.3 `gradlew :app:assembleRelease` (подписанный, кейстор)
+- [x] 4.3 `gradlew :app:assembleRelease` (подписанный, кейстор) — ✅ BUILD SUCCESSFUL (3м26с), APK 2.8–5.4 МБ
 - [ ] 4.4 Смоук на устройстве: старт/стоп, тумблер TG, «Применить в Telegram», логи, диагностика
 - [x] 4.5 Новое ядро byedpi (`ba532298`) + HEV собрались через NDK (в логе только warning'и)
 
 ## Фаза 5 — Git и релиз-процесс
-- [ ] 5.1 Коммит мерджа с описанием переноса
+- [x] 5.1 Коммит мерджа `2c1c284` «Merge upstream ByeByeDPI v1.8.2 into TG WS base (2.0.0)»
 - [ ] 5.2 Обновить `README.md` (база v1.8.2, новые фичи, что изменилось)
 - [ ] 5.3 Версия: `2.0.0` / versionCode `20` (подтвердить)
 - [ ] 5.4 Push: ветка `tgws-v2` в `ewenloy/ByeByeDPI-x-tg`, потом решение по `main`
-- [ ] 5.5 Ревизия `sbox.md` (команды ADB под `applicationId` форка)
+- [x] 5.5 `sbox.md` — локальная копия перенесена, команды ADB переписаны под `io.github.ewenloy.byedpixtg`
 
 ## Фаза 6 — Issue на странице ewenloy (закрывать ПОСЛЕ сборки v2)
 - [ ] 6.1 #11 (Samsung A55, «не удалось запустить vpn») — проверить на новой базе (FGS-типы, Always-On из v1.7.6–1.8.2)
@@ -87,3 +87,8 @@
 - `namespace` остаётся `io.github.romanvht.byedpi` (как в апстриме).
 - Новое ядро: `byedpi` `ba532298` (UDP/ICMP fix, auto-mode, кэш групп, delay connect и т.д.). `hev-socks5-tunnel` без изменений (2.14.4).
 - Референс-патчи: форк — `%TEMP%\bbd_cmp\fork_patch\*.patch`, апстрим — `%TEMP%\bbd_cmp\upstream_patch\*.patch`.
+- Артефакт Windows: в сабмодуле `hev-socks5-tunnel` git показывает `T include/hev-socks5-tunnel.h` и грязные вложенные сабмодули — это следствие `core.symlinks=false` при checkout под Windows + shallow-клонов. На сборку не влияет.
+
+### Журнал прогресса
+- **Этап 1 (сегодня)**: площадка `ByeByeDPI-x-tg-v2` создана, ветка `tgws-v2`, merge апстрима `96a3c1f`, разрешены все 19 конфликтов, версия 2.0.0 (20), собраны debug и release APK, коммит `2c1c284`.
+- Следующие шаги: 3.7 (автозапуск TG WS на бут), 3.9 (кнопка «Проверить TG WS» в тесте), 3.10 (TG-строка в общем уведомлении), 3.11 + 4.4 (смоук на устройстве), 5.2–5.5 (README/версия/push), фаза 6 (issues).
