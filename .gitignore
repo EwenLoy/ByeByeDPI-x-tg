@@ -60,6 +60,8 @@ third-party/tg-ws-proxy-rs/target/
 # Local notes / scratch (not for GitHub)
 TODO.md
 sbox.md
+MIGRATION-TGWS.md
+AUTHORS.md
 *.private.md
 .env
 .env.*
