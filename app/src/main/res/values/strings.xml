@@ -291,6 +291,7 @@
     <string name="tg_ws_secret_not_generated">Будет сгенерирован при первом запуске</string>
     <string name="tg_ws_secret_copy_btn">Скопировать</string>
     <string name="tg_ws_toggle_btn">TG WS Прокси</string>
+    <string name="quick_tile_mode_title">Что переключает плитка</string>
     <string name="ewenloy_tg_diagnostics_title">TG WS Diagnostics</string>
     <string name="ewenloy_tg_diagnostics_summary">Живые метрики и последний служебный лог</string>
     <string name="ewenloy_tg_diagnostics_dialog_title">TG WS Diagnostics (live)</string>

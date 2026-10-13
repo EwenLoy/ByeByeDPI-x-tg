@@ -16,6 +16,7 @@ import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import io.github.romanvht.byedpi.R
 import io.github.romanvht.byedpi.activities.MainActivity
+import io.github.romanvht.byedpi.services.QuickTileService
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -500,6 +501,10 @@ class TgWsProxyService : Service() {
         _isRunning.value = isRunning
         if (!isRunning) {
             _isVerifiedRunning.value = false
+        }
+        // Плитка быстрых настроек должна узнать о смене состояния сразу
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            QuickTileService.updateTile()
         }
     }
 

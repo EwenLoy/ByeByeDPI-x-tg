@@ -80,4 +80,15 @@
         <item>6</item>
         <item>8</item>
     </string-array>
+
+    <array name="quick_tile_modes">
+        <item name="bbd">ByeDPI</item>
+        <item name="tgws">TG WS прокси</item>
+        <item name="both">ByeDPI + TG WS</item>
+    </array>
+    <array name="quick_tile_modes_entries">
+        <item name="bbd">bbd</item>
+        <item name="tgws">tgws</item>
+        <item name="both">both</item>
+    </array>
 </resources>
