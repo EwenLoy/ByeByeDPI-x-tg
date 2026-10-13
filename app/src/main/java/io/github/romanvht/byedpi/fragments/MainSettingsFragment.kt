@@ -18,6 +18,7 @@ import io.github.romanvht.byedpi.BuildConfig
 import io.github.romanvht.byedpi.activities.TestActivity
 import io.github.romanvht.byedpi.data.Mode
 import io.github.romanvht.byedpi.data.PrivateDnsState
+import io.github.romanvht.byedpi.databinding.DialogDonateBinding
 import io.github.romanvht.byedpi.ewenloy.tgws.EwenloyTgWsServiceExtension
 import io.github.romanvht.byedpi.utility.*
 import androidx.core.net.toUri
@@ -25,6 +26,14 @@ import androidx.core.net.toUri
 class MainSettingsFragment : PreferenceFragmentCompat() {
     companion object {
         private val TAG: String = MainSettingsFragment::class.java.simpleName
+
+        private const val DONATE_URL_AUTHOR = "https://dalink.to/ewenloy"
+        private const val DONATE_URL_CLOUDFLIPS = "https://pay.cloudtips.ru/p/92c754db"
+        private const val DONATE_URL_BOOSTY = "https://boosty.to/romanvht/donate"
+        private const val DONATE_URL_KEKSIK = "https://t.me/romanvht_donate_bot"
+        private const val CONTRIBUTOR_URL_HUFREA = "https://github.com/hufrea"
+        private const val CONTRIBUTOR_URL_FLOWSEAL = "https://github.com/Flowseal"
+        private const val CONTRIBUTOR_URL_AMURCANOV = "https://github.com/amurcanov"
     }
 
     private val tgWsExt = EwenloyTgWsServiceExtension()
@@ -277,23 +286,61 @@ class MainSettingsFragment : PreferenceFragmentCompat() {
     }
 
     private fun showDonateDialog() {
-        val context = requireContext()
+        val binding = DialogDonateBinding.inflate(layoutInflater)
+        val dialog = AlertDialog.Builder(requireContext())
+            .setTitle(getString(R.string.donate))
+            .setView(binding.root)
+            .setNegativeButton(android.R.string.cancel, null)
+            .create()
 
+        binding.donateAuthorButton.setOnClickListener {
+            openUrl(DONATE_URL_AUTHOR)
+            dialog.dismiss()
+        }
+        binding.donateContributorsButton.setOnClickListener {
+            dialog.dismiss()
+            showContributorsDialog()
+        }
+
+        dialog.show()
+    }
+
+    private fun showContributorsDialog() {
         val items = arrayOf(
-            getString(R.string.donate_message),
+            getString(R.string.donate_contrib_romanvht),
+            getString(R.string.donate_contrib_hufrea),
+            getString(R.string.donate_contrib_flowseal),
+            getString(R.string.donate_contrib_amurcanov),
+        )
+
+        AlertDialog.Builder(requireContext())
+            .setTitle(getString(R.string.donate_contributors_title))
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> showUpstreamDonateDialog()
+                    1 -> openUrl(CONTRIBUTOR_URL_HUFREA)
+                    2 -> openUrl(CONTRIBUTOR_URL_FLOWSEAL)
+                    3 -> openUrl(CONTRIBUTOR_URL_AMURCANOV)
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun showUpstreamDonateDialog() {
+        val items = arrayOf(
             getString(R.string.donate_cloudtips),
             getString(R.string.donate_boosty),
             getString(R.string.donate_telegram_bot),
-            getString(R.string.donate_thanks),
         )
 
-        AlertDialog.Builder(context)
-            .setTitle(getString(R.string.donate))
+        AlertDialog.Builder(requireContext())
+            .setTitle(getString(R.string.donate_support_romanvht))
             .setItems(items) { _, which ->
                 when (which) {
-                    1 -> openUrl("https://pay.cloudtips.ru/p/92c754db")
-                    2 -> openUrl("https://boosty.to/romanvht/donate")
-                    3 -> openUrl("https://t.me/romanvht_donate_bot")
+                    0 -> openUrl(DONATE_URL_CLOUDFLIPS)
+                    1 -> openUrl(DONATE_URL_BOOSTY)
+                    2 -> openUrl(DONATE_URL_KEKSIK)
                 }
             }
             .setNegativeButton(android.R.string.cancel, null)

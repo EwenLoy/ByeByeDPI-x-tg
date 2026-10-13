@@ -226,21 +226,12 @@
             android:title="@string/donate" />
 
         <Preference
-            android:key="telegram_group"
-            android:title="@string/telegram_link"
-            android:icon="@drawable/ic_telegram">
-            <intent
-                android:action="android.intent.action.VIEW"
-                android:data="https://t.me/byebyedpi_group" />
-        </Preference>
-
-        <Preference
             android:key="source_code"
             android:title="@string/source_code_link"
             android:icon="@drawable/ic_github">
             <intent
                 android:action="android.intent.action.VIEW"
-                android:data="https://github.com/romanvht/ByeDPIAndroid" />
+                android:data="https://github.com/EwenLoy/ByeByeDPI-x-tg" />
         </Preference>
 
         <Preference

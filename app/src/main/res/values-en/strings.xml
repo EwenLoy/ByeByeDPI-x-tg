@@ -117,7 +117,6 @@
     <string name="cmd_history_pinned">Pinned</string>
     <string name="cmd_history_applied">Applied</string>
     <string name="cmd_history_delete">Delete</string>
-    <string name="telegram_link">Telegram group</string>
     <string name="title_test">Proxy test</string>
     <string name="test_unavailable">Wait for the test to finish first</string>
     <string name="summary_test">Testing of prepared command sets</string>
@@ -190,7 +189,15 @@
     <string name="main_btn_test">Test</string>
     <string name="main_btn_list">Lists</string>
     <string name="donate">Donate</string>
-    <string name="donate_message">If the app has been useful to you, you can buy me a cup of coffee ☕️</string>
+    <string name="donate_message">If the app has been useful to you, you can support the mod author. This helps the project grow.</string>
+    <string name="donate_ewenloy_button">❤️ Open dalink.to/ewenloy</string>
+    <string name="donate_contributors_button">Support the project contributors</string>
+    <string name="donate_contributors_title">Project contributors</string>
+    <string name="donate_contrib_romanvht">romanvht — ByeByeDPI for Android (app base)</string>
+    <string name="donate_contrib_hufrea">hufrea — byedpi core</string>
+    <string name="donate_contrib_flowseal">Flowseal — original tg-ws-proxy (MIT)</string>
+    <string name="donate_contrib_amurcanov">amurcanov — Android port of tg-ws-proxy</string>
+    <string name="donate_support_romanvht">Support romanvht</string>
     <string name="donate_cloudtips">💳 CloudTips (RU cards only)</string>
     <string name="donate_boosty">🧡 Boosty (RU and international cards)</string>
     <string name="donate_telegram_bot">🍰 Telegram Bot (cards, wallets, crypto)</string>

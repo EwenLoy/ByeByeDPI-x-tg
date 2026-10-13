@@ -117,7 +117,6 @@
     <string name="cmd_history_pinned">Бекітілді</string>
     <string name="cmd_history_applied">Қолданылды</string>
     <string name="cmd_history_delete">Өшіру</string>
-    <string name="telegram_link">Telegram группа</string>
     <string name="title_test">Стратегияларды таңдау</string>
     <string name="test_unavailable">Алдымен тексерудің аяқталуын күтіңіз</string>
     <string name="summary_test">Командалық жолға дайындалған аргументтердің жұмысын тестілеу</string>
@@ -190,7 +189,15 @@
     <string name="main_btn_test">Тест</string>
     <string name="main_btn_list">Тізімдер</string>
     <string name="donate">Садақа беру</string>
-    <string name="donate_message">Егер қолданба сізге пайдалы болса, маған бір кесе кофе сыйлай аласыз ☕️</string>
+    <string name="donate_message">Егер қолданба сізге пайдалы болса, мод авторын қолдай аласыз. Бұл жобаның дамуына көмектеседі.</string>
+    <string name="donate_ewenloy_button">❤️ dalink.to/ewenloy ашу</string>
+    <string name="donate_contributors_button">Жобаға үлес қосқандарды қолдау</string>
+    <string name="donate_contributors_title">Жобаға үлес қосқандар</string>
+    <string name="donate_contrib_romanvht">romanvht — Android үшін ByeByeDPI (қолданба негізі)</string>
+    <string name="donate_contrib_hufrea">hufrea — byedpi ядросы</string>
+    <string name="donate_contrib_flowseal">Flowseal — түпнұсқа tg-ws-proxy (MIT)</string>
+    <string name="donate_contrib_amurcanov">amurcanov — tg-ws-proxy Android порты</string>
+    <string name="donate_support_romanvht">romanvht қолдау</string>
     <string name="donate_cloudtips">💳 CloudTips (тек ресейлік карталар)</string>
     <string name="donate_boosty">🧡 Boosty (РФ және шетелдік карталар)</string>
     <string name="donate_telegram_bot">🍰 Telegram бот (карталары, әмияндар, крипто)</string>
