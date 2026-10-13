@@ -61,6 +61,7 @@ third-party/tg-ws-proxy-rs/target/
 TODO.md
 sbox.md
 MIGRATION-TGWS.md
+UI-REDESIGN-PLAN.md
 AUTHORS.md
 *.private.md
 .env
