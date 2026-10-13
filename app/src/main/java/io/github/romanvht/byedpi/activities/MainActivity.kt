@@ -289,43 +289,6 @@ class MainActivity : BaseActivity() {
             startActivity(intent)
         }
 
-        // Тап по статус-строке TG WS — открыть логи прокси
-        binding.tgWsStatusText.setOnClickListener {
-            startActivity(Intent(this, TgWsLogsActivity::class.java))
-        }
-
-        binding.tgProxyButton.setOnClickListener {
-            val prefs = getPreferences()
-            val tgWsEnabled = prefs.getBoolean(EwenloyTgWsServiceExtension.EWENLOY_TG_WS_MODE_KEY, false)
-            if (tgWsEnabled) {
-                val port = EwenloyTgWsServiceExtension.TG_WS_PORT
-                val secretKey = prefs.getString(EwenloyTgWsServiceExtension.PREF_SECRET_KEY, "") ?: ""
-                val secret = if (secretKey.isEmpty()) "00000000000000000000000000000000" else secretKey
-                val url = "https://t.me/proxy?server=127.0.0.1&port=$port&secret=dd$secret"
-                applyToTelegramPackages(url)
-            } else {
-                val port = prefs.getString("byedpi_proxy_port", "1080") ?: "1080"
-                val tgUri = android.net.Uri.parse("tg://socks?server=127.0.0.1&port=$port")
-                startActivity(Intent(Intent.ACTION_VIEW, tgUri))
-            }
-        }
-
-        binding.tgWsToggleButton.setOnClickListener {
-            val prefs = getPreferences()
-            val current = prefs.getBoolean(EwenloyTgWsServiceExtension.EWENLOY_TG_WS_MODE_KEY, false)
-            prefs.edit().putBoolean(EwenloyTgWsServiceExtension.EWENLOY_TG_WS_MODE_KEY, !current).apply()
-            updateTgWsToggleButton()
-            // Независимое управление: TG WS прокси стартует/останавливается сам,
-            // независимо от состояния основного ByeDPI-сервиса
-            tgWsExt.initialize(this, prefs)
-            if (!current) {
-                tgWsExt.start(prefs)
-                Toast.makeText(this, R.string.tg_ws_toggle_btn, Toast.LENGTH_SHORT).show()
-            } else {
-                tgWsExt.stop()
-            }
-        }
-
         binding.strategyButton.setOnClickListener {
             showStrategyPicker()
         }
@@ -718,11 +681,19 @@ class MainActivity : BaseActivity() {
             Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).apply { setPackage(pkg) }
         }
         if (intents.size == 1) {
-            startActivity(intents.first().addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            try {
+                startActivity(intents.first().addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            } catch (e: Exception) {
+                Toast.makeText(this, R.string.ewenloy_tg_open_proxy_error, Toast.LENGTH_SHORT).show()
+            }
         } else {
             val chooser = Intent.createChooser(intents.first(), getString(R.string.ewenloy_tg_choose_client))
             chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, intents.drop(1).toTypedArray())
-            startActivity(chooser)
+            try {
+                startActivity(chooser)
+            } catch (e: Exception) {
+                Toast.makeText(this, R.string.ewenloy_tg_open_proxy_error, Toast.LENGTH_SHORT).show()
+            }
         }
     }
 }

@@ -276,7 +276,7 @@
     <string name="test_tg_ws_ok">TG WS доступен: %1$s</string>
     <string name="test_tg_ws_fail">TG WS недоступен: %1$s</string>
     <string name="ewenloy_tg_open_proxy_title">Подключить прокси в Telegram</string>
-    <string name="ewenloy_tg_open_proxy_summary">Открыть tg://socks ссылку с текущим локальным прокси</string>
+    <string name="ewenloy_tg_open_proxy_summary">Открыть ссылку SOCKS5-прокси ByeDPI в Telegram</string>
     <string name="ewenloy_tg_open_proxy_error">Не удалось открыть Telegram-ссылку</string>
     <string name="ewenloy_tg_choose_client">Выберите клиент Telegram</string>
     
@@ -310,5 +310,5 @@
     <string name="notification_restart">Перезапустить</string>
     <string name="notification_disconnect">Отключить</string>
     <string name="port_is_not_available">Порт %1$d занят, попробуйте другой</string>
-    <string name="ewenloy_tg_open_proxy_summary_ws">Подключить Telegram к WS прокси на порту 1082</string>
+    <string name="ewenloy_tg_open_proxy_summary_ws">Подключить Telegram к MTProto-прокси (WS, порт 1082)</string>
 </resources>

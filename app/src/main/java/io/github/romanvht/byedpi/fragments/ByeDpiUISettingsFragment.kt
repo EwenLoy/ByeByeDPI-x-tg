@@ -1,8 +1,8 @@
 package io.github.romanvht.byedpi.fragments
 
 import android.content.Intent
-import android.net.Uri
 import android.content.SharedPreferences
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -64,16 +64,7 @@ class ByeDpiUISettingsFragment : PreferenceFragmentCompat() {
 
         findPreferenceNotNull<Preference>("ewenloy_tg_open_proxy_link")
             .setOnPreferenceClickListener {
-                val prefs = sharedPreferences ?: return@setOnPreferenceClickListener true
-                val host = prefs.getString("byedpi_proxy_ip", "127.0.0.1") ?: "127.0.0.1"
-                val port = prefs.getString("byedpi_proxy_port", "1080") ?: "1080"
-                val tgUri = Uri.parse("tg://socks?server=$host&port=$port")
-
-                try {
-                    startActivity(Intent(Intent.ACTION_VIEW, tgUri))
-                } catch (_: Exception) {
-                    Toast.makeText(requireContext(), R.string.ewenloy_tg_open_proxy_error, Toast.LENGTH_SHORT).show()
-                }
+                openTelegramProxyLink()
                 true
             }
 
@@ -89,6 +80,7 @@ class ByeDpiUISettingsFragment : PreferenceFragmentCompat() {
     override fun onResume() {
         super.onResume()
         sharedPreferences?.registerOnSharedPreferenceChangeListener(preferenceListener)
+        updateProxyLinkSummary()
         uiHandler.post(statusUpdater)
     }
 
@@ -153,6 +145,7 @@ class ByeDpiUISettingsFragment : PreferenceFragmentCompat() {
         splitTlsRecAtSni.isEnabled = tlsRecEnabled
 
         updateTelegramRuntimeStatus()
+        updateProxyLinkSummary()
     }
 
     private fun updateTelegramRuntimeStatus() {
@@ -170,6 +163,96 @@ class ByeDpiUISettingsFragment : PreferenceFragmentCompat() {
             else -> R.string.tg_ws_status_idle
         }
         statusPref.summary = getString(summaryRes)
+    }
+
+    private fun updateProxyLinkSummary() {
+        val prefs = sharedPreferences ?: return
+        val linkPref = findPreferenceNotNull<Preference>("ewenloy_tg_open_proxy_link")
+        val tgWsEnabled = prefs.getBoolean(EwenloyTgWsServiceExtension.EWENLOY_TG_WS_MODE_KEY, false)
+        linkPref.summary = getString(
+            if (tgWsEnabled) R.string.ewenloy_tg_open_proxy_summary_ws
+            else R.string.ewenloy_tg_open_proxy_summary
+        )
+    }
+
+    // Режим TG WS: MTProto WS proxy, ссылка t.me/proxy с secret=dd...
+    // Иначе: обычный SOCKS5 прокси ByeDPI
+    private fun openTelegramProxyLink() {
+        val prefs = sharedPreferences ?: return
+        val tgWsEnabled = prefs.getBoolean(EwenloyTgWsServiceExtension.EWENLOY_TG_WS_MODE_KEY, false)
+
+        if (tgWsEnabled) {
+            val port = EwenloyTgWsServiceExtension.TG_WS_PORT
+            val secretKey = prefs.getString(EwenloyTgWsServiceExtension.PREF_SECRET_KEY, "") ?: ""
+            val secret = if (secretKey.isEmpty()) "00000000000000000000000000000000" else secretKey
+            applyToTelegramPackages("https://t.me/proxy?server=127.0.0.1&port=$port&secret=dd$secret")
+        } else {
+            val host = prefs.getString("byedpi_proxy_ip", "127.0.0.1") ?: "127.0.0.1"
+            val port = prefs.getString("byedpi_proxy_port", "1080") ?: "1080"
+            val tgUri = Uri.parse("tg://socks?server=$host&port=$port")
+
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, tgUri))
+            } catch (_: Exception) {
+                Toast.makeText(requireContext(), R.string.ewenloy_tg_open_proxy_error, Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun applyToTelegramPackages(url: String) {
+        val telegramPackages = listOf(
+            "org.telegram.messenger",
+            "com.radolyn.ayugram",
+            "com.exteragram.messenger",
+            "org.telegram.plus",
+            "ir.ilmili.telegraph",
+            "org.telegram.BifToGram",
+            "tw.nekomimi.nekogram",
+            "xyz.nextalone.nagram",
+            "uz.unnarsx.cherrygram",
+            "org.telegram.mdgram",
+            "org.forkclient.messenger.beta",
+            "app.nicegram",
+            "top.qwq2333.nullgram",
+            "com.iMe.android",
+            "ru.dahl.messenger",
+            "com.scriptsaz.litegram",
+            "org.thunderdog.challegram"
+        )
+        val context = requireContext()
+        val pm = context.packageManager
+        val availablePackages = telegramPackages.filter {
+            try {
+                pm.getPackageInfo(it, 0)
+                true
+            } catch (e: android.content.pm.PackageManager.NameNotFoundException) {
+                false
+            }
+        }
+        if (availablePackages.isEmpty()) {
+            Toast.makeText(context, R.string.ewenloy_tg_open_proxy_error, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val targetedIntents = availablePackages.map { pkg ->
+            Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply { setPackage(pkg) }
+        }
+        if (targetedIntents.size == 1) {
+            val intent = targetedIntents.first().apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+            try {
+                context.startActivity(intent)
+            } catch (e: Exception) {
+                Toast.makeText(context, R.string.ewenloy_tg_open_proxy_error, Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            val chooserIntent = Intent.createChooser(targetedIntents.first(), getString(R.string.ewenloy_tg_choose_client))
+            chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, targetedIntents.drop(1).toTypedArray())
+            chooserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            try {
+                context.startActivity(chooserIntent)
+            } catch (e: Exception) {
+                Toast.makeText(context, R.string.ewenloy_tg_open_proxy_error, Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     private fun showDiagnosticsDialog() {
