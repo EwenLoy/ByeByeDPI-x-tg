@@ -16,7 +16,6 @@ import io.github.romanvht.byedpi.utility.*
 
 class ByeDpiProxyService : Service() {
     companion object {
-        internal const val FOREGROUND_SERVICE_ID = 2
         private const val PAUSE_NOTIFICATION_ID = 3
         private const val NOTIFICATION_CHANNEL_ID = "ByeDPI Proxy"
     }
@@ -77,18 +76,11 @@ class ByeDpiProxyService : Service() {
     private fun startForeground() {
         val notifications = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         notifications.cancel(PAUSE_NOTIFICATION_ID)
-        val notification: Notification = createConnectionNotification(
-            this,
-            NOTIFICATION_CHANNEL_ID,
-            R.string.notification_title,
-            R.string.proxy_notification_content,
-            Mode.Proxy,
-            tgWsExt.statusLine().takeIf { it.isNotBlank() },
-        )
+        val notification = RuntimeNotification.build(this)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(FOREGROUND_SERVICE_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            startForeground(RuntimeNotification.ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         } else {
-            startForeground(FOREGROUND_SERVICE_ID, notification)
+            startForeground(RuntimeNotification.ID, notification)
         }
     }
 

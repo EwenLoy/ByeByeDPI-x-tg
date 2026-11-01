@@ -35,53 +35,6 @@ fun registerNotificationChannel(context: Context, id: String, @StringRes name: I
     }
 }
 
-fun createConnectionNotification(
-    context: Context,
-    channelId: String,
-    @StringRes title: Int,
-    @StringRes content: Int,
-    mode: Mode,
-    statusLine: String? = null,
-): Notification {
-    val baseText = context.getString(content)
-    val bigText = if (!statusLine.isNullOrBlank()) "$baseText\n$statusLine" else baseText
-    return NotificationCompat.Builder(context, channelId)
-        .setSmallIcon(R.drawable.ic_notification)
-        .setSilent(true)
-        .setContentTitle(context.getString(title))
-        .setContentText(baseText)
-        // Развёрнутая шторка показывает и режим, и строку Telegram WS с трафиком
-        .setStyle(NotificationCompat.BigTextStyle().bigText(bigText))
-        .addAction(0, context.getString(R.string.service_pause_btn),
-            PendingIntent.getBroadcast(
-                context,
-                mode.ordinal,
-                Intent(context, ServiceActionReceiver::class.java).setAction(PAUSE_ACTION)
-                    .putExtra(ServiceActionReceiver.EXTRA_MODE, mode.name)
-                    .putExtra(ServiceActionReceiver.EXTRA_PID, Process.myPid()),
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-            )
-        )
-        .addAction(0, context.getString(R.string.service_stop_btn),
-            PendingIntent.getBroadcast(
-                context,
-                mode.ordinal,
-                Intent(context, ServiceActionReceiver::class.java).setAction(STOP_ACTION)
-                    .putExtra(ServiceActionReceiver.EXTRA_MODE, mode.name)
-                    .putExtra(ServiceActionReceiver.EXTRA_PID, Process.myPid()),
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-            )
-        )
-        .setContentIntent(
-            PendingIntent.getActivity(
-                context,
-                0,
-                Intent(context, MainActivity::class.java),
-                PendingIntent.FLAG_IMMUTABLE,
-            )
-        )
-        .build()
-}
 
 fun createPauseNotification(
     context: Context,

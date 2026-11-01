@@ -11,32 +11,26 @@ import io.github.romanvht.byedpi.ewenloy.tgws.EwenloyTgWsServiceExtension
 import io.github.romanvht.byedpi.ewenloy.tgws.TgWsProxyService
 
 /**
- * Ссылка на прокси в Telegram и её открытие в выбранном клиенте.
+ * Ссылка на MTProto-прокси и её открытие в выбранном клиенте Telegram.
  *
- * TG WS включён: tg://proxy (MTProto, secret=dd...).
- * Иначе: tg://socks (обычный прокси ByeDPI).
+ * Всегда tg://proxy: SOCKS-ссылка на 127.0.0.1:1080 в VPN-режиме не работает
+ * (Telegram ходит через VPN, а не через локальный SOCKS).
  *
- * Клиента выбирает система: ссылку tg:// обрабатывает любой установленный
- * клиент, а не только те, чьи пакеты перечислены в приложении.
+ * Клиента выбирает система, поэтому подходят любые установленные клиенты,
+ * а не только те, чьи пакеты перечислены в приложении.
  */
 object TelegramProxyLink {
 
     fun open(context: Context, prefs: SharedPreferences) {
-        val wsEnabled = prefs.getBoolean(EwenloyTgWsServiceExtension.EWENLOY_TG_WS_MODE_KEY, false)
-        if (wsEnabled && !TgWsProxyService.isRunning.value) {
+        if (!TgWsProxyService.isRunning.value) {
             Toast.makeText(context, R.string.ewenloy_tg_not_ready, Toast.LENGTH_SHORT).show()
             return
         }
 
-        val uri = if (wsEnabled) {
-            val secret = EwenloyTgWsServiceExtension.ensureSecret(prefs)
-            Uri.parse(
-                "tg://proxy?server=127.0.0.1&port=${EwenloyTgWsServiceExtension.TG_WS_PORT}&secret=dd$secret"
-            )
-        } else {
-            val port = prefs.getString("byedpi_proxy_port", "1080") ?: "1080"
-            Uri.parse("tg://socks?server=127.0.0.1&port=$port")
-        }
+        val secret = EwenloyTgWsServiceExtension.ensureSecret(prefs)
+        val uri = Uri.parse(
+            "tg://proxy?server=127.0.0.1&port=${EwenloyTgWsServiceExtension.TG_WS_PORT}&secret=dd$secret"
+        )
 
         val intent = Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         val chooser = Intent.createChooser(intent, context.getString(R.string.ewenloy_tg_choose_client))

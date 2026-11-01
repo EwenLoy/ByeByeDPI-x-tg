@@ -16,6 +16,7 @@ import androidx.core.app.NotificationCompat
 import io.github.romanvht.byedpi.R
 import io.github.romanvht.byedpi.activities.MainActivity
 import io.github.romanvht.byedpi.services.QuickTileService
+import io.github.romanvht.byedpi.utility.RuntimeNotification
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -63,7 +64,6 @@ class TgWsProxyService : Service() {
         const val EXTRA_CFPROXY_DOMAIN = "EXTRA_CFPROXY_DOMAIN"
         const val EXTRA_SECRET_KEY = "EXTRA_SECRET_KEY"
         
-        private const val NOTIFICATION_ID = 101
         private const val CHANNEL_ID = "TG_WS_Proxy_Service_v4"
         private const val TAG = "ProxyService"
 
@@ -163,16 +163,7 @@ class TgWsProxyService : Service() {
         lastNotificationAtMs = notificationStartedAtMs
         _lastTraffic.value = null
 
-        val notification = createNotification(lastNotificationContent)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
-        }
+        showNotification(lastNotificationContent)
 
         stopInProgress = false
         
@@ -256,9 +247,22 @@ class TgWsProxyService : Service() {
 
         lastNotificationContent = content
         lastNotificationAtMs = now
+        showNotification(content)
+    }
+
+    /** Одна карточка на всё приложение: startForeground заодно обновляет её текст. */
+    private fun showNotification(content: String) {
         try {
-            val manager = getSystemService(NotificationManager::class.java)
-            manager?.notify(NOTIFICATION_ID, createNotification(content))
+            val notification = RuntimeNotification.build(this, content)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(
+                    RuntimeNotification.ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                )
+            } else {
+                startForeground(RuntimeNotification.ID, notification)
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to update notification", e)
         }
@@ -369,19 +373,14 @@ class TgWsProxyService : Service() {
             _lastTraffic.value = null
             requestNativeStop("stop")
             updateRunningState(false)
+            // DETACH: уведомление общее с ByeDPI — если VPN работает, оно должно остаться
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopForeground(STOP_FOREGROUND_DETACH)
             } else {
                 @Suppress("DEPRECATION")
-                stopForeground(true)
+                stopForeground(false)
             }
-            // Явно снимаем уведомление: stopForeground(REMOVE) не всегда
-            // убирает нотификации, обновлённые через NotificationManager.notify()
-            try {
-                getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to cancel notification", e)
-            }
+            RuntimeNotification.sync(this@TgWsProxyService)
             stopSelf()
         }
     }
@@ -458,46 +457,6 @@ class TgWsProxyService : Service() {
         }
     }
 
-    private fun createNotification(content: String): Notification {
-        val openIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
-        val openPendingIntent = PendingIntent.getActivity(
-            this, 1, openIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val stopIntent = Intent(this, TgWsProxyService::class.java).apply {
-            action = ACTION_STOP
-        }
-        val restartIntent = Intent(this, TgWsProxyService::class.java).apply {
-            action = ACTION_RESTART
-        }
-        val restartPendingIntent = PendingIntent.getService(
-            this, 2, restartIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val stopPendingIntent = PendingIntent.getService(
-            this, 0, stopIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Telegram WS Proxy")
-            .setContentText(content)
-            .setSmallIcon(R.drawable.ic_notification)
-            .setContentIntent(openPendingIntent) // Tap notification → open app
-            .addAction(android.R.drawable.ic_popup_sync, getString(R.string.notification_restart), restartPendingIntent)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, getString(R.string.notification_disconnect), stopPendingIntent)
-            .setOngoing(true)
-            .setOnlyAlertOnce(true)
-            .setSilent(true)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setCategory(NotificationCompat.CATEGORY_SERVICE)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setWhen(notificationStartedAtMs.takeIf { it > 0L } ?: System.currentTimeMillis())
-            .setShowWhen(false)
-            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
-            .build()
-    }
 
     override fun onDestroy() {
         restartJob?.cancel()

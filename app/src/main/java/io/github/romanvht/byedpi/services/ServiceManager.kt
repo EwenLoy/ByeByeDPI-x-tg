@@ -9,6 +9,7 @@ import android.os.Build
 import android.util.Log
 import io.github.romanvht.byedpi.R
 import io.github.romanvht.byedpi.data.*
+import io.github.romanvht.byedpi.utility.RuntimeNotification
 import io.github.romanvht.byedpi.utility.createPauseNotification
 import io.github.romanvht.byedpi.utility.registerNotificationChannel
 import kotlinx.coroutines.*
@@ -199,9 +200,7 @@ object ServiceManager {
         if (running == null) {
             app.stopService(Intent(app, ByeDpiVpnService::class.java))
             app.stopService(Intent(app, ByeDpiProxyService::class.java))
-            val notifications = app.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            notifications.cancel(ByeDpiVpnService.FOREGROUND_SERVICE_ID)
-            notifications.cancel(ByeDpiProxyService.FOREGROUND_SERVICE_ID)
+            RuntimeNotification.sync(app)
             if (appStatus.first != AppStatus.Halted) publish(appStatus.second, AppStatus.Halted, STOPPED_BROADCAST)
             return
         }
