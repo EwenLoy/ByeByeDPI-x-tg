@@ -283,6 +283,8 @@ object ServiceManager {
         val sender = if (mode == Mode.VPN) Sender.VPN else Sender.Proxy
         application?.let {
             it.sendBroadcast(Intent(action).setPackage(it.packageName).putExtra(SENDER, sender.ordinal))
+            // Карточка в шторке должна менять кнопки сразу, а не ждать следующего тика
+            RuntimeNotification.sync(it)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) QuickTileService.updateTile()
     }
