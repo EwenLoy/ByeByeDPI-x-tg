@@ -200,8 +200,8 @@ object ServiceManager {
         if (running == null) {
             app.stopService(Intent(app, ByeDpiVpnService::class.java))
             app.stopService(Intent(app, ByeDpiProxyService::class.java))
-            RuntimeNotification.sync(app)
             if (appStatus.first != AppStatus.Halted) publish(appStatus.second, AppStatus.Halted, STOPPED_BROADCAST)
+            RuntimeNotification.sync(app)
             return
         }
         val current = Session(running.first, NativeEngine(app, running.first, running.second))

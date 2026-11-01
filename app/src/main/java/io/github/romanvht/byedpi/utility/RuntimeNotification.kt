@@ -11,7 +11,6 @@ import io.github.romanvht.byedpi.R
 import io.github.romanvht.byedpi.activities.MainActivity
 import io.github.romanvht.byedpi.data.AppStatus
 import io.github.romanvht.byedpi.data.Mode
-import io.github.romanvht.byedpi.data.PAUSE_ACTION
 import io.github.romanvht.byedpi.data.STOP_ACTION
 import io.github.romanvht.byedpi.ewenloy.tgws.TgWsProxyService
 import io.github.romanvht.byedpi.receiver.ServiceActionReceiver
@@ -20,8 +19,9 @@ import io.github.romanvht.byedpi.services.appStatus
 /**
  * Одно уведомление на всё приложение: ByeDPI и TG WS показываются в одной карточке.
  *
- * Идентификатор общий для всех сервисов, поэтому в шторке всегда одна запись,
- * а не отдельные уведомления на VPN и на прокси.
+ * Идентификатор общий для всех сервисов, поэтому в шторке всегда одна запись.
+ * Режим ByeDPI передаётся явно: сервис работает в отдельном процессе и знает
+ * своё состояние раньше, чем оно доедет до общего appStatus.
  */
 object RuntimeNotification {
     const val ID = 1
@@ -30,27 +30,28 @@ object RuntimeNotification {
     private const val CHANNEL_PROXY = "ByeDPI Proxy"
     private const val CHANNEL_TG = "TG_WS_Proxy_Service_v4"
 
-    fun build(context: Context, tgMessage: String? = null): Notification {
-        val (status, mode) = appStatus
-        val bbdRunning = status == AppStatus.Running
+    fun build(context: Context, mode: Mode?, tgMessage: String? = null): Notification {
         val tgRunning = TgWsProxyService.isRunning.value
 
         val lines = buildList {
-            if (bbdRunning) add(
+            if (mode != null) add(
                 context.getString(
                     if (mode == Mode.VPN) R.string.vpn_notification_content
                     else R.string.proxy_notification_content
                 )
             )
             when {
+                tgRunning -> {
+                    add(context.getString(R.string.tg_ws_status_idle))
+                    tgMessage?.takeIf { it.isNotBlank() }?.let { add(it) }
+                }
                 tgMessage != null -> add(tgMessage)
-                tgRunning -> add(context.getString(R.string.tg_ws_status_idle))
             }
         }
 
         val channel = when {
-            bbdRunning && mode == Mode.Proxy -> CHANNEL_PROXY
-            bbdRunning -> CHANNEL_VPN
+            mode == Mode.Proxy -> CHANNEL_PROXY
+            mode == Mode.VPN -> CHANNEL_VPN
             else -> CHANNEL_TG
         }
 
@@ -72,18 +73,17 @@ object RuntimeNotification {
                 )
             )
 
-        if (bbdRunning) {
+        if (mode != null) {
             builder.addAction(
-                0, context.getString(R.string.service_pause_btn), modeAction(context, mode, PAUSE_ACTION)
-            )
-            builder.addAction(
-                0, context.getString(R.string.service_stop_btn), modeAction(context, mode, STOP_ACTION)
+                0,
+                context.getString(R.string.notification_stop_bbd),
+                modeAction(context, mode, STOP_ACTION)
             )
         }
         if (tgRunning) {
             builder.addAction(
                 0,
-                context.getString(R.string.notification_disconnect),
+                context.getString(R.string.notification_stop_tg),
                 PendingIntent.getService(
                     context,
                     0,
@@ -95,11 +95,15 @@ object RuntimeNotification {
         return builder.build()
     }
 
+    /** Текущий режим ByeDPI по общему состоянию приложения. */
+    fun runningMode(): Mode? = if (appStatus.first == AppStatus.Running) appStatus.second else null
+
     /** Обновляет общее уведомление или убирает его, если ничего не запущено. */
     fun sync(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
-        val running = appStatus.first == AppStatus.Running || TgWsProxyService.isRunning.value
-        if (running) manager.notify(ID, build(context)) else manager.cancel(ID)
+        val mode = runningMode()
+        val running = mode != null || TgWsProxyService.isRunning.value
+        if (running) manager.notify(ID, build(context, mode)) else manager.cancel(ID)
     }
 
     private fun modeAction(context: Context, mode: Mode, action: String): PendingIntent =

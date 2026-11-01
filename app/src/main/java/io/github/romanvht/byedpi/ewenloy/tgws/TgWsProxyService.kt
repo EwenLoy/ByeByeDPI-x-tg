@@ -253,7 +253,7 @@ class TgWsProxyService : Service() {
     /** Одна карточка на всё приложение: startForeground заодно обновляет её текст. */
     private fun showNotification(content: String) {
         try {
-            val notification = RuntimeNotification.build(this, content)
+            val notification = RuntimeNotification.build(this, RuntimeNotification.runningMode(), content)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 startForeground(
                     RuntimeNotification.ID,

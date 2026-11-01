@@ -14,6 +14,8 @@
     <string name="service_start_btn">Старт</string>
     <string name="service_pause_btn">Пауза</string>
     <string name="service_stop_btn">Стоп</string>
+    <string name="notification_stop_bbd">Остановить ByeDPI</string>
+    <string name="notification_stop_tg">Остановить TG WS</string>
     <string name="service_paused_text">Приостановлен</string>
     <string name="open_editor">Редактор</string>
     <string name="settings">Настройки</string>
