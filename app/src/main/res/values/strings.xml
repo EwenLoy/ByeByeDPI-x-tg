@@ -279,6 +279,7 @@
     <string name="ewenloy_tg_open_proxy_summary">Открыть ссылку SOCKS5-прокси ByeDPI в Telegram</string>
     <string name="ewenloy_tg_open_proxy_error">Не удалось открыть Telegram-ссылку</string>
     <string name="ewenloy_tg_choose_client">Выберите клиент Telegram</string>
+    <string name="ewenloy_tg_not_ready">Прокси ещё запускается, подождите пару секунд</string>
     
     <string name="tg_ws_cf_enabled_title">CloudFlare CDN</string>
     <string name="tg_ws_cf_enabled_summary">Маршрутизация через CF WebSocket-домены (стабильнее на некоторых сетях)</string>

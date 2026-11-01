@@ -25,8 +25,9 @@ object LogManager {
         job = CoroutineScope(Dispatchers.IO).launch {
             val readerJob = launch(Dispatchers.IO) {
                 try {
-                    val pid = android.os.Process.myPid()
-                    val process = ProcessBuilder("logcat", "-v", "tag", "--pid", pid.toString())
+                    // Без --pid: logcat отдаёт строки всех процессов приложения,
+                    // включая :native, где живёт нативное ядро.
+                    val process = ProcessBuilder("logcat", "-v", "tag")
                         .redirectErrorStream(true)
                         .start()
                     logcatProcess = process

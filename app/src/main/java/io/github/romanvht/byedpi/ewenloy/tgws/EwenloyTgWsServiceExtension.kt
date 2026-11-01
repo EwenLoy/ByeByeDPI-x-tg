@@ -96,17 +96,6 @@ class EwenloyTgWsServiceExtension {
 
     // ---- helpers ----
 
-    private fun ensureSecret(prefs: SharedPreferences): String {
-        val existing = prefs.getString(PREF_SECRET_KEY, "")?.trim() ?: ""
-        if (existing.length == 32 && existing.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' })
-            return existing
-        val generated = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }
-            .joinToString("") { "%02x".format(it) }
-        prefs.edit(commit = true) { putString(PREF_SECRET_KEY, generated) }
-        Log.i(TAG, "Generated new MTProto secret")
-        return generated
-    }
-
     private fun buildDcIps(prefs: SharedPreferences): String {
         if (prefs.getBoolean(PREF_CF_ENABLED, true)) return ""
         val isExp = prefs.getBoolean(PREF_EXPERIMENTAL_MODE, false)
@@ -138,6 +127,18 @@ class EwenloyTgWsServiceExtension {
     companion object {
         private const val TAG = "EwenloyTgWsExt"
         const val TG_WS_PORT = 1082
+
+        /** Секрет MTProto: существующий 32-символьный hex или новый. */
+        fun ensureSecret(prefs: SharedPreferences): String {
+            val existing = prefs.getString(PREF_SECRET_KEY, "")?.trim() ?: ""
+            if (existing.length == 32 && existing.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' })
+                return existing
+            val generated = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }
+                .joinToString("") { "%02x".format(it) }
+            prefs.edit(commit = true) { putString(PREF_SECRET_KEY, generated) }
+            Log.i(TAG, "Generated new MTProto secret")
+            return generated
+        }
 
         const val EWENLOY_TG_WS_MODE_KEY       = "ewenloy_tg_ws_mode_enabled"
         const val EWENLOY_TG_RUNTIME_STATUS_KEY = "ewenloy_tg_runtime_status"
