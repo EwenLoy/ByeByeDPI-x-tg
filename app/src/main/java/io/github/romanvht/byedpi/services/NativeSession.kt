@@ -293,7 +293,13 @@ internal class NativeSession(
     @Suppress("DEPRECATION")
     private fun terminate() {
         try {
-            service.stopForeground(true)
+            // DETACH, а не REMOVE: уведомление общее с TG WS и может быть ещё нужно.
+            // Если TG WS тоже остановлен, ServiceManager уберёт его через RuntimeNotification.
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                service.stopForeground(Service.STOP_FOREGROUND_DETACH)
+            } else {
+                service.stopForeground(false)
+            }
             service.stopSelf()
         } finally {
             Process.killProcess(Process.myPid())
