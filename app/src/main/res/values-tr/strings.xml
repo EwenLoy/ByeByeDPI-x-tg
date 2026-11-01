@@ -1,6 +1,6 @@
 <resources>
     <string name="byedpi_docs">https://github.com/hufrea/byedpi/blob/main/README.md</string>
-    <string name="app_name">ByeByeDPI</string>
+    <string name="app_name">ByeByeDPI x tg</string>
     <string name="cmd_documentation">Dökümantasyon</string>
     <string name="toggle_connect">Aç/Kapat</string>
     <string name="vpn_connect">Bağlan</string>
@@ -55,13 +55,13 @@
     <string name="byedpi_tlsrec_enabled_setting">TLS kaydını böl</string>
     <string name="byedpi_tlsrec_position_setting">TLS kaydı bölme pozisyonu</string>
     <string name="byedpi_tlsrec_at_sni_setting">TLS kaydını SNIde böl</string>
-    <string name="version">ByeByeDPI</string>
+    <string name="version">ByeByeDPI x tg</string>
     <string name="source_code_link">Kaynak kodu</string>
     <string name="byedpi_readme_link">Hepsi ne anlama geliyor?</string>
     <string name="failed_to_start">Başlatırken hata oluştu ( %1$s )</string>
     <string name="vpn_channel_name">VPN</string>
     <string name="proxy_channel_name">Proxy</string>
-    <string name="notification_title">ByeByeDPI</string>
+    <string name="notification_title">ByeByeDPI x tg</string>
     <string name="vpn_notification_content">VPN çalışıyor</string>
     <string name="proxy_notification_content">Proxy çalışıyor</string>
     <string name="general_category">Genel</string>

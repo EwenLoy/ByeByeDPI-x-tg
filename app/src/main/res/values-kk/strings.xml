@@ -1,6 +1,6 @@
 <resources>
     <string name="byedpi_docs">https://github.com/hufrea/byedpi/blob/main/README.md</string>
-    <string name="app_name">ByeByeDPI</string>
+    <string name="app_name">ByeByeDPI x tg</string>
     <string name="cmd_documentation">ByeDPI документациясы</string>
     <string name="toggle_connect">Қосу/Сөнд</string>
     <string name="vpn_connect">Қосылу</string>
@@ -55,13 +55,13 @@
     <string name="byedpi_tlsrec_enabled_setting">TLS жазбаны бөлу</string>
     <string name="byedpi_tlsrec_position_setting">TLS жазбану бөлу позициясы</string>
     <string name="byedpi_tlsrec_at_sni_setting">SNI ішіндегі TLS жазбасын бөлу</string>
-    <string name="version">ByeByeDPI</string>
+    <string name="version">ByeByeDPI x tg</string>
     <string name="source_code_link">Бастапқы код</string>
     <string name="byedpi_readme_link">Мұның бәрі нені білдіреді?</string>
     <string name="failed_to_start">%1$s іске қосу сәтсіз аяқталды</string>
     <string name="vpn_channel_name">VPN</string>
     <string name="proxy_channel_name">Прокси</string>
-    <string name="notification_title">ByeByeDPI</string>
+    <string name="notification_title">ByeByeDPI x tg</string>
     <string name="vpn_notification_content">VPN жұмыс істеуде</string>
     <string name="proxy_notification_content">Прокси жұмыс істеуде</string>
     <string name="general_category">Жалпы</string>
