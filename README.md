@@ -17,6 +17,9 @@
 <a href="https://github.com/EwenLoy/ByeByeDPI-x-tg/stargazers">
   <img src="https://img.shields.io/github/stars/EwenLoy/ByeByeDPI-x-tg?style=for-the-badge&logo=github&color=ffca28&labelColor=24292e" alt="Stars">
 </a>
+<a href="https://github.com/EwenLoy/ByeByeDPI-x-tg/releases">
+  <img src="https://img.shields.io/github/downloads/EwenLoy/ByeByeDPI-x-tg/total?style=for-the-badge&logo=github&label=Downloads&color=ff6d00&labelColor=24292e" alt="Downloads">
+</a>
 
 </div>
 <br>
