@@ -553,11 +553,23 @@ pub async fn tcp_fallback(
     tg_dec: TrackedStream,
     cancel_token: CancellationToken,
 ) -> bool {
+    let now = now_unix_f64();
+    let fail_until = TCP_FAIL_UNTIL.read().get(&dc).copied().unwrap_or(0.0);
+    if now < fail_until {
+        ldebug!(" DC{} TCP fallback skipped (cooldown)", dc);
+        return false;
+    }
     let addr = format!("{}:{}", dst, port);
     let mut remote =
-        match tokio::time::timeout(Duration::from_secs(10), TcpStream::connect(&addr)).await {
-            Ok(Ok(r)) => r,
-            _ => return false,
+        match tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(&addr)).await {
+            Ok(Ok(r)) => {
+                TCP_FAIL_UNTIL.write().remove(&dc);
+                r
+            }
+            _ => {
+                TCP_FAIL_UNTIL.write().insert(dc, now + TCP_FAIL_COOLDOWN);
+                return false;
+            }
         };
     let _ = remote.set_nodelay(true);
 

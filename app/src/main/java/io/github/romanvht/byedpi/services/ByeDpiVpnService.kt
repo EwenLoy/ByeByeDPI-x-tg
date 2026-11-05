@@ -142,6 +142,14 @@ class ByeDpiVpnService : VpnService() {
                         Log.e(TAG, "Не удалось добавить приложение $packageName в белый список", e)
                     }
                 }
+                // Себя исключаем всегда. Иначе при пустом белом списке в туннель уходят
+                // и сокеты самого ByeDPI (движок 1080 и TG WS 1082), получается петля
+                // 1080 <-> 1082: туннель поднимается, живёт пару секунд и рвётся.
+                try {
+                    builder.addDisallowedApplication(applicationContext.packageName)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Не удалось исключить себя из белого списка", e)
+                }
             }
 
             "disable" -> {

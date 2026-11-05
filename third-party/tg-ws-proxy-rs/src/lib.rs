@@ -171,6 +171,7 @@ pub extern "C" fn StopProxy() -> c_int {
     STATS.reset();
     WS_BLACKLIST.write().clear();
     DC_FAIL_UNTIL.write().clear();
+    TCP_FAIL_UNTIL.write().clear();
     cfproxy::clear_cfproxy_429_cooldowns();
 
     linfo!("StopProxy: exit");

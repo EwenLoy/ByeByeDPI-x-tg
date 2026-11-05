@@ -15,6 +15,8 @@ pub const DEFAULT_SEND_BUF: usize = 256 * 1024;
 pub const DEFAULT_POOL_SZ: i32 = 4;
 
 pub const DC_FAIL_COOLDOWN: f64 = 30.0;
+pub const TCP_FAIL_COOLDOWN: f64 = 120.0;
+pub const TCP_FAIL_MAX_STRIKES: i32 = 3;
 pub const WS_FAIL_TIMEOUT: f64 = 2.0;
 
 pub const BRIDGE_READ_TIMEOUT: Duration = Duration::from_secs(120);
@@ -129,6 +131,8 @@ pub static WS_BLACKLIST: Lazy<RwLock<HashMap<(i32, i32), bool>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 pub static DC_FAIL_UNTIL: Lazy<RwLock<HashMap<(i32, i32), f64>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
+
+pub static TCP_FAIL_UNTIL: Lazy<RwLock<HashMap<i32, f64>>> = Lazy::new(|| RwLock::new(HashMap::new()));
 
 pub static ZERO64: [u8; 64] = [0u8; 64];
 
