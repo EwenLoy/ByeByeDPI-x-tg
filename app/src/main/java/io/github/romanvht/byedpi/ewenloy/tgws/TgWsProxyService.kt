@@ -571,19 +571,23 @@ class TgWsProxyService : Service() {
         // Используем stopScope: он не отменяется в onDestroy(),
         // поэтому уведомление гарантированно убирается
         stopScope.launch {
-            updateNotification(getString(R.string.notification_stopping), force = true)
             _lastTraffic.value = null
-            requestNativeStop("stop")
+            // Состояние переключаем ДО остановки натива: иначе UI и шторка
+            // остаются на тексте «Остановка прокси», пока сервис жив.
             updateRunningState(false)
             PreferenceManager.getDefaultSharedPreferences(this@TgWsProxyService).edit()
                 .putString(EwenloyTgWsServiceExtension.EWENLOY_TG_RUNTIME_STATUS_KEY, EwenloyTgWsServiceExtension.TG_STATUS_DISABLED)
                 .apply()
-            // DETACH: уведомление общее с ByeDPI — если VPN работает, оно должно остаться
+            requestNativeStop("stop")
+            RuntimeNotification.sync(this@TgWsProxyService)
+            // DETACH только если остался живой ByeDPI: карточка общая.
+            // Если не осталось ничего — убираем её совсем, иначе висит «Остановка прокси».
+            val nothingElseRunning = RuntimeNotification.runningMode() == null && !_isRunning.value
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                stopForeground(STOP_FOREGROUND_DETACH)
+                stopForeground(if (nothingElseRunning) STOP_FOREGROUND_REMOVE else STOP_FOREGROUND_DETACH)
             } else {
                 @Suppress("DEPRECATION")
-                stopForeground(false)
+                stopForeground(nothingElseRunning)
             }
             RuntimeNotification.sync(this@TgWsProxyService)
             stopSelf()

@@ -48,6 +48,7 @@ class MainActivity : BaseActivity() {
             if (isFinishing) return
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && isDestroyed) return
             updateTgWsStatus()
+            updateTgWsToggleButton()
             tgWsStatusHandler.postDelayed(this, 1500)
         }
     }
@@ -251,13 +252,15 @@ class MainActivity : BaseActivity() {
 
         binding.tgWsToggleButton?.setOnClickListener {
             val prefs = getPreferences()
-            val current = prefs.getBoolean(EwenloyTgWsServiceExtension.EWENLOY_TG_WS_MODE_KEY, false)
-            prefs.edit().putBoolean(EwenloyTgWsServiceExtension.EWENLOY_TG_WS_MODE_KEY, !current).apply()
+            // Источник правды — живой сервис, а не преф: остановку могли сделать
+            // из шторки или плитки, и тогда преф уже рассинхронизирован.
+            val running = TgWsProxyService.isRunning.value
+            prefs.edit().putBoolean(EwenloyTgWsServiceExtension.EWENLOY_TG_WS_MODE_KEY, !running).apply()
             updateTgWsToggleButton()
             // Независимое управление: TG WS прокси стартует/останавливается сам,
             // независимо от состояния основного ByeDPI-сервиса
             tgWsExt.initialize(this, prefs)
-            if (!current) {
+            if (!running) {
                 tgWsExt.start(prefs)
                 Toast.makeText(this, R.string.tg_ws_toggle_btn, Toast.LENGTH_SHORT).show()
             } else {
@@ -634,10 +637,12 @@ class MainActivity : BaseActivity() {
     }
 
     private fun updateTgWsToggleButton() {
-        val enabled = getPreferences().getBoolean(EwenloyTgWsServiceExtension.EWENLOY_TG_WS_MODE_KEY, false)
+        // Зелёный = прокси реально работает. Раньше цвет брался из префа
+        // «включено», поэтому после остановки из шторки/плитки кнопка оставалась зелёной.
+        val running = TgWsProxyService.isRunning.value
         val btn = binding.tgWsToggleButton
         val icon = binding.tgWsToggleIcon
-        if (enabled) {
+        if (running) {
             btn.setCardBackgroundColor(ContextCompat.getColor(this, R.color.green_active))
             icon.setColorFilter(ContextCompat.getColor(this, android.R.color.white))
         } else {

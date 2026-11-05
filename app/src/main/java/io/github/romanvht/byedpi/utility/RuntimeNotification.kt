@@ -32,9 +32,7 @@ import io.github.romanvht.byedpi.services.appStatus
 object RuntimeNotification {
     const val ID = 1
 
-    private const val CHANNEL_VPN = "ByeDPIVpn"
-    private const val CHANNEL_PROXY = "ByeDPI Proxy"
-    private const val CHANNEL_TG = "TG_WS_Proxy_Service_v4"
+    private const val CHANNEL_SERVICE = "ByeDPI_Service_v1"
 
     private const val REQ_BBD = 10
     private const val REQ_TG = 11
@@ -58,13 +56,12 @@ object RuntimeNotification {
             }
         }
 
-        val channel = when {
-            mode == Mode.Proxy -> CHANNEL_PROXY
-            mode == Mode.VPN -> CHANNEL_VPN
-            else -> CHANNEL_TG
-        }
+        // Одна карточка — один канал. Иначе обновление статуса (например, снятие
+        // «Остановка прокси») молча отбрасывается: Android не даёт менять канал
+        // у уже показанного уведомления, а канал раньше зависел от активного режима.
+        ensureChannel(context)
 
-        val builder = NotificationCompat.Builder(context, channel)
+        val builder = NotificationCompat.Builder(context, CHANNEL_SERVICE)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(context.getString(R.string.notification_title))
             .setContentText(lines.firstOrNull().orEmpty())
@@ -123,6 +120,25 @@ object RuntimeNotification {
         val mode = runningMode()
         val running = mode != null || TgWsProxyService.isRunning.value
         if (running) manager.notify(ID, build(context, mode)) else manager.cancel(ID)
+    }
+
+    /** Канал для карточки ID 1. Создаётся идемпотентно: уведомление без канала не покажется. */
+    private fun ensureChannel(context: Context) {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O) return
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        if (manager.getNotificationChannel(CHANNEL_SERVICE) != null) return
+        val channel = android.app.NotificationChannel(
+            CHANNEL_SERVICE,
+            context.getString(R.string.notification_channel_name),
+            NotificationManager.IMPORTANCE_MIN
+        ).apply {
+            description = context.getString(R.string.notification_channel_description)
+            setShowBadge(false)
+            setSound(null, null)
+            enableVibration(false)
+            enableLights(false)
+        }
+        manager.createNotificationChannel(channel)
     }
 
     private fun action(context: Context, requestCode: Int, action: String, mode: String?): PendingIntent {

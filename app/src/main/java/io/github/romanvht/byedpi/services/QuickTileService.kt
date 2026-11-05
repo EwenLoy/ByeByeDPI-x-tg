@@ -145,6 +145,18 @@ class QuickTileService : TileService() {
             else -> appStatus.first == AppStatus.Running
         }
         setState(if (running) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE)
+        updateTileLabel()
+    }
+
+    /** Подпись плитки должна говорить, что именно она переключает. */
+    private fun updateTileLabel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        val target = when (tileMode()) {
+            QUICK_TILE_TG_WS -> "TG WS"
+            QUICK_TILE_BOTH -> "ByeDPI + TG WS"
+            else -> "ByeDPI"
+        }
+        appTile?.subtitle = target
     }
 
     private fun setState(state: Int) {

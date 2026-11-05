@@ -60,14 +60,21 @@ class EwenloyTgWsServiceExtension {
         this.preferences = preferences
         val nowEnabled = preferences.getBoolean(EWENLOY_TG_WS_MODE_KEY, false)
         if (!nowEnabled) { if (isRunning()) stop(); return }
-        if (!isRunning()) start(preferences) else stop().also { start(preferences) }
+        if (!isRunning()) start(preferences) else stop(clearPreference = false).also { start(preferences) }
     }
 
-    fun stop() {
+    fun stop(clearPreference: Boolean = true) {
         val ctx = context ?: return
         ctx.startService(Intent(ctx, TgWsProxyService::class.java).apply {
             action = TgWsProxyService.ACTION_STOP
         })
+        // Гасим и флаг «включено»: иначе кнопка на главном остаётся зелёной,
+        // а BootReceiver поднимает прокси после перезагрузки против воли юзера.
+        // При внутреннем перезапуске (refreshFromPreferences) флаг не трогаем.
+        if (clearPreference) {
+            preferences?.edit(commit = true) { putBoolean(EWENLOY_TG_WS_MODE_KEY, false) }
+            enabled = false
+        }
         writeStatus(TG_STATUS_DISABLED)
         Log.i(TAG, "TgWsProxyService stop requested")
     }
