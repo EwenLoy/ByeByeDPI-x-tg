@@ -18,14 +18,18 @@ use tokio_rustls::client::TlsStream;
 use tokio_rustls::TlsConnector;
 
 // ---------------------------------------------------------------------------
-// WS opcodes
+// WS opcodes — proxy/raw_websocket.py
 // ---------------------------------------------------------------------------
 
+pub const OP_CONT: u8 = 0x0;
 pub const OP_TEXT: u8 = 0x1;
 pub const OP_BINARY: u8 = 0x2;
 pub const OP_CLOSE: u8 = 0x8;
 pub const OP_PING: u8 = 0x9;
 pub const OP_PONG: u8 = 0xA;
+
+pub const MAX_MESSAGE_LEN: u64 = 16 * 1024 * 1024;
+const MAX_FRAME_PAYLOAD: u64 = 16 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // TLS config: InsecureSkipVerify + session cache (как в Go)
@@ -91,6 +95,10 @@ static TLS_CONFIG: Lazy<Arc<ClientConfig>> = Lazy::new(|| {
     cfg.resumption = rustls::client::Resumption::in_memory_sessions(100);
     Arc::new(cfg)
 });
+
+// Отдельный контекст для fronting (check_hostname=False в оригинале).
+// На практике оба контекста NoVerify; разделение сохранено для паритета.
+static TLS_CONFIG_FRONTING: Lazy<Arc<ClientConfig>> = Lazy::new(|| TLS_CONFIG.clone());
 
 // ---------------------------------------------------------------------------
 // WsHandshakeError
@@ -164,18 +172,37 @@ impl From<std::io::Error> for WsError {
 }
 
 // ---------------------------------------------------------------------------
-// RawWebSocket
+// RawWebSocket — порт proxy/raw_websocket.py
+// Поддерживает TLS (443) и plain (80, disable_secure), SNI-fronting,
+// фрагментацию (CONT/TEXT/BINARY reassembly), close reasons.
 // ---------------------------------------------------------------------------
 
+enum WsReader {
+    Tls(BufReader<tokio::io::ReadHalf<TlsStream<TcpStream>>>),
+    Plain(BufReader<tokio::io::ReadHalf<TcpStream>>),
+}
+
+enum WsWriter {
+    Tls(tokio::io::WriteHalf<TlsStream<TcpStream>>),
+    Plain(tokio::io::WriteHalf<TcpStream>),
+}
+
 pub struct RawWebSocket {
-    reader: tokio::sync::Mutex<BufReader<tokio::io::ReadHalf<TlsStream<TcpStream>>>>,
-    writer: tokio::sync::Mutex<tokio::io::WriteHalf<TlsStream<TcpStream>>>,
+    reader: tokio::sync::Mutex<WsReader>,
+    writer: tokio::sync::Mutex<WsWriter>,
+    frag: tokio::sync::Mutex<Vec<u8>>,
     pub closed: AtomicBool,
+    pub secure: bool,
 }
 
 impl RawWebSocket {
     pub fn is_closed(&self) -> bool {
         self.closed.load(Ordering::Relaxed)
+    }
+
+    /// Совместимость: закрыт ли транспорт (аналог writer.transport.is_closing()).
+    pub fn transport_closing(&self) -> bool {
+        self.is_closed()
     }
 
     pub async fn send(&self, data: &[u8]) -> Result<(), WsError> {
@@ -193,7 +220,8 @@ impl RawWebSocket {
         let mut writer = self.writer.lock().await;
         for part in parts {
             let frame = build_frame(OP_BINARY, part, true);
-            match tokio::time::timeout(WS_WRITE_TIMEOUT, writer.write_all(&frame)).await {
+            let res = tokio::time::timeout(WS_WRITE_TIMEOUT, write_all_match(&mut writer, &frame)).await;
+            match res {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => {
                     self.closed.store(true, Ordering::Relaxed);
@@ -219,9 +247,9 @@ impl RawWebSocket {
     async fn write_frame(&self, frame: &[u8], timeout: Duration) -> Result<(), WsError> {
         let mut writer = self.writer.lock().await;
         let res = if timeout > Duration::ZERO {
-            tokio::time::timeout(timeout, writer.write_all(frame)).await
+            tokio::time::timeout(timeout, write_all_match(&mut writer, frame)).await
         } else {
-            Ok(writer.write_all(frame).await)
+            Ok(write_all_match(&mut writer, frame).await)
         };
         match res {
             Ok(Ok(())) => Ok(()),
@@ -236,10 +264,16 @@ impl RawWebSocket {
         }
     }
 
-    // Recv обрабатывает контрольные фреймы (как Go Recv)
+    // Recv с реассемблированием фрагментов (как Go/Python Recv).
     pub async fn recv(&self) -> Result<Vec<u8>, WsError> {
-        while !self.is_closed() {
-            let (opcode, payload) = match self.read_frame().await {
+        loop {
+            if self.is_closed() {
+                return Err(WsError::Io(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "EOF",
+                )));
+            }
+            let (opcode, payload, fin) = match self.read_frame().await {
                 Ok(v) => v,
                 Err(e) => {
                     self.closed.store(true, Ordering::Relaxed);
@@ -249,6 +283,8 @@ impl RawWebSocket {
             match opcode {
                 OP_CLOSE => {
                     self.closed.store(true, Ordering::Relaxed);
+                    let (code, reason) = parse_close(&payload);
+                    ldebug!("WS OP_CLOSE from upstream: code={:?} reason={:?}", code, reason);
                     let mut close_payload = payload;
                     if close_payload.len() > 2 {
                         close_payload.truncate(2);
@@ -266,23 +302,39 @@ impl RawWebSocket {
                     continue;
                 }
                 OP_PONG => continue,
-                OP_TEXT | OP_BINARY => return Ok(payload),
-                _ => {}
+                OP_CONT | OP_TEXT | OP_BINARY => {
+                    let mut frag = self.frag.lock().await;
+                    if fin && frag.is_empty() {
+                        return Ok(payload);
+                    }
+                    if frag.len() + payload.len() > MAX_MESSAGE_LEN as usize {
+                        frag.clear();
+                        return Err(WsError::Other(format!(
+                            "WS message too large: {} bytes",
+                            frag.len() + payload.len()
+                        )));
+                    }
+                    frag.extend_from_slice(&payload);
+                    if !fin {
+                        continue;
+                    }
+                    let msg = std::mem::take(&mut *frag);
+                    return Ok(msg);
+                }
+                _ => continue,
             }
         }
-        Err(WsError::Io(std::io::Error::new(
-            std::io::ErrorKind::UnexpectedEof,
-            "EOF",
-        )))
     }
 
     pub async fn close(&self) {
         if self.closed.swap(true, Ordering::Relaxed) {
             return;
         }
+        // Best-effort close frame + shutdown транспорта.
         let frame = build_frame(OP_CLOSE, &[], true);
         let _ = self.write_frame(&frame, WS_CONTROL_TIMEOUT).await;
-        // Skipping writer.shutdown().await to avoid hanging on dead connections
+        let mut writer = self.writer.lock().await;
+        let _ = shutdown_match(&mut writer).await;
     }
 
     // recv с дедлайном чтения (для bridge).
@@ -299,7 +351,7 @@ impl RawWebSocket {
             }
             let frame = {
                 let mut reader = self.reader.lock().await;
-                match tokio::time::timeout(dur, read_frame_locked(&mut reader)).await {
+                match tokio::time::timeout(dur, read_frame_match(&mut reader)).await {
                     Ok(Ok(v)) => v,
                     Ok(Err(e)) => {
                         self.closed.store(true, Ordering::Relaxed);
@@ -308,7 +360,7 @@ impl RawWebSocket {
                     Err(_) => return Err(WsError::Timeout),
                 }
             };
-            let (opcode, payload) = frame;
+            let (opcode, payload, fin) = frame;
             match opcode {
                 OP_CLOSE => {
                     self.closed.store(true, Ordering::Relaxed);
@@ -329,59 +381,63 @@ impl RawWebSocket {
                     continue;
                 }
                 OP_PONG => continue,
-                OP_TEXT | OP_BINARY => return Ok(payload),
+                OP_CONT | OP_TEXT | OP_BINARY => {
+                    let mut frag = self.frag.lock().await;
+                    if fin && frag.is_empty() {
+                        return Ok(payload);
+                    }
+                    if frag.len() + payload.len() > MAX_MESSAGE_LEN as usize {
+                        frag.clear();
+                        return Err(WsError::Other("WS message too large".to_string()));
+                    }
+                    frag.extend_from_slice(&payload);
+                    if !fin {
+                        continue;
+                    }
+                    let msg = std::mem::take(&mut *frag);
+                    return Ok(msg);
+                }
                 _ => continue,
             }
         }
     }
 
-    async fn read_frame(&self) -> Result<(u8, Vec<u8>), WsError> {
+    async fn read_frame(&self) -> Result<(u8, Vec<u8>, bool), WsError> {
         let mut reader = self.reader.lock().await;
-        let mut hdr = [0u8; 2];
-        reader.read_exact(&mut hdr).await?;
-
-        let opcode = hdr[0] & 0x0F;
-        let mut length = (hdr[1] & 0x7F) as u64;
-
-        if length == 126 {
-            let mut buf = [0u8; 2];
-            reader.read_exact(&mut buf).await?;
-            length = BigEndian::read_u16(&buf) as u64;
-        } else if length == 127 {
-            let mut buf = [0u8; 8];
-            reader.read_exact(&mut buf).await?;
-            length = BigEndian::read_u64(&buf);
-        }
-
-        let has_mask = (hdr[1] & 0x80) != 0;
-        let mut mask_key = [0u8; 4];
-        if has_mask {
-            reader.read_exact(&mut mask_key).await?;
-        }
-
-        const MAX_FRAME_PAYLOAD: u64 = 16 * 1024 * 1024;
-        if length > MAX_FRAME_PAYLOAD {
-            return Err(WsError::Other(format!("frame too large: {} bytes", length)));
-        }
-        let mut payload = vec![0u8; length as usize];
-        if length > 0 {
-            reader.read_exact(&mut payload).await?;
-        }
-        if has_mask {
-            xor_mask_in_place(&mut payload, &mask_key);
-        }
-        Ok((opcode, payload))
+        read_frame_match(&mut reader).await
     }
 }
 
-// Чтение одного фрейма из уже захваченного reader (без повторного lock).
-// Используется recv_with_timeout, чтобы держать lock на всё время чтения фрейма.
-async fn read_frame_locked(
-    reader: &mut BufReader<tokio::io::ReadHalf<TlsStream<TcpStream>>>,
-) -> Result<(u8, Vec<u8>), WsError> {
+async fn write_all_match(writer: &mut WsWriter, frame: &[u8]) -> std::io::Result<()> {
+    match writer {
+        WsWriter::Tls(w) => w.write_all(frame).await,
+        WsWriter::Plain(w) => w.write_all(frame).await,
+    }
+}
+
+async fn shutdown_match(writer: &mut WsWriter) -> std::io::Result<()> {
+    match writer {
+        WsWriter::Tls(w) => w.shutdown().await,
+        WsWriter::Plain(w) => w.shutdown().await,
+    }
+}
+
+async fn read_frame_match(reader: &mut WsReader) -> Result<(u8, Vec<u8>, bool), WsError> {
+    match reader {
+        WsReader::Tls(r) => read_frame_generic(r).await,
+        WsReader::Plain(r) => read_frame_generic(r).await,
+    }
+}
+
+// Чтение одного фрейма (generic над TLS/plain reader).
+async fn read_frame_generic<R>(reader: &mut BufReader<R>) -> Result<(u8, Vec<u8>, bool), WsError>
+where
+    R: AsyncReadExt + Unpin,
+{
     let mut hdr = [0u8; 2];
     reader.read_exact(&mut hdr).await?;
 
+    let fin = (hdr[0] & 0x80) != 0;
     let opcode = hdr[0] & 0x0F;
     let mut length = (hdr[1] & 0x7F) as u64;
 
@@ -401,7 +457,6 @@ async fn read_frame_locked(
         reader.read_exact(&mut mask_key).await?;
     }
 
-    const MAX_FRAME_PAYLOAD: u64 = 16 * 1024 * 1024;
     if length > MAX_FRAME_PAYLOAD {
         return Err(WsError::Other(format!("frame too large: {} bytes", length)));
     }
@@ -412,7 +467,35 @@ async fn read_frame_locked(
     if has_mask {
         xor_mask_in_place(&mut payload, &mask_key);
     }
-    Ok((opcode, payload))
+    Ok((opcode, payload, fin))
+}
+
+fn parse_close(payload: &[u8]) -> (Option<u16>, String) {
+    if payload.len() < 2 {
+        return (None, String::new());
+    }
+    let code = BigEndian::read_u16(&payload[..2]);
+    let text = String::from_utf8_lossy(&payload[2..]).to_string();
+    let name = match code {
+        1000 => "normal",
+        1001 => "going_away",
+        1002 => "protocol_error",
+        1003 => "unsupported_data",
+        1006 => "abnormal",
+        1007 => "bad_data",
+        1008 => "policy_violation",
+        1009 => "too_big",
+        1010 => "missing_extension",
+        1011 => "internal_error",
+        _ => "",
+    };
+    if name.is_empty() {
+        (Some(code), text)
+    } else if text.is_empty() {
+        (Some(code), name.to_string())
+    } else {
+        (Some(code), format!("{} ({})", text, name))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -484,17 +567,25 @@ pub fn build_frame(opcode: u8, data: &[u8], mask: bool) -> Vec<u8> {
 }
 
 // ---------------------------------------------------------------------------
-// Connection helpers
+// Connection helpers — порт RawWebSocket.connect(host, domain, timeout,
+// path, sni, secure) из proxy/raw_websocket.py
 // ---------------------------------------------------------------------------
 
 fn set_sock_opts(stream: &TcpStream) {
     if TCP_NODELAY {
         let _ = stream.set_nodelay(true);
     }
-    // Аналог Go: SetKeepAlive(true)+SetKeepAlivePeriod(30s) — детект мёртвых соединений на мобиле.
+    // Аналог Go/Python: keepalive 30s — детект мёртвых соединений на мобиле.
     let sock = socket2::SockRef::from(stream);
     let ka = socket2::TcpKeepalive::new().with_time(Duration::from_secs(30));
     let _ = sock.set_tcp_keepalive(&ka);
+    // proxy/raw_websocket.py::set_sock_opts — buffer_size из конфига.
+    let buf = BUFFER_SIZE.load(std::sync::atomic::Ordering::Relaxed);
+    if buf > 0 {
+        let b = buf as usize;
+        let _ = sock.set_recv_buffer_size(b);
+        let _ = sock.set_send_buffer_size(b);
+    }
 }
 
 pub fn ws_connect_timeout(timeout: f64) -> Duration {
@@ -520,76 +611,95 @@ fn server_name(domain: &str) -> ServerName<'static> {
         .unwrap_or_else(|_| ServerName::IpAddress("127.0.0.1".parse::<IpAddr>().unwrap().into()))
 }
 
-// wsConnectOnce — заголовки 1-в-1 как в Python raw_websocket.py (без User-Agent).
-pub async fn ws_connect_once(
-    dial_addr: &str,
+// Типизированный handshake: возвращает готовый RawWebSocket без type-erasure.
+async fn handshake_tls(
+    read_half: tokio::io::ReadHalf<TlsStream<TcpStream>>,
+    mut write_half: tokio::io::WriteHalf<TlsStream<TcpStream>>,
     domain: &str,
     path: &str,
     timeout: Duration,
 ) -> Result<RawWebSocket, WsError> {
-    if dial_addr.is_empty() {
-        return Err(WsError::Other("empty dial address".to_string()));
-    }
-
-    let target_addr = format!("{}:443", dial_addr);
-
-    let raw_conn = match tokio::time::timeout(timeout, TcpStream::connect(&target_addr)).await {
-        Ok(Ok(c)) => c,
-        Ok(Err(e)) => return Err(WsError::Io(e)),
-        Err(_) => return Err(WsError::Timeout),
-    };
-    set_sock_opts(&raw_conn);
-
-    let connector = TlsConnector::from(TLS_CONFIG.clone());
-    let sni = server_name(domain);
-
-    let handshake_timeout = ws_handshake_timeout(timeout);
-    let tls_conn =
-        match tokio::time::timeout(handshake_timeout, connector.connect(sni, raw_conn)).await {
-            Ok(Ok(c)) => c,
-            Ok(Err(e)) => {
-                if e.kind() != std::io::ErrorKind::ConnectionReset {
-                    ldebug!(" ws tls fail {} via {}: {}", domain, dial_addr, e);
-                }
-                return Err(WsError::Io(e));
-            }
-            Err(_) => {
-                ldebug!(" ws tls fail {} via {}: timeout", domain, dial_addr);
-                return Err(WsError::Timeout);
-            }
-        };
-
-    let (read_half, mut write_half) = tokio::io::split(tls_conn);
-
-    // websocket key
     let mut ws_key_bytes = [0u8; 16];
     rand::thread_rng().fill_bytes(&mut ws_key_bytes);
     let ws_key = base64::engine::general_purpose::STANDARD.encode(ws_key_bytes);
-
     let req = format!(
-        "GET {} HTTP/1.1\r\n\
-         Host: {}\r\n\
-         Upgrade: websocket\r\n\
-         Connection: Upgrade\r\n\
-         Sec-WebSocket-Key: {}\r\n\
-         Sec-WebSocket-Version: 13\r\n\
-         Sec-WebSocket-Protocol: binary\r\n\r\n",
+        "GET {} HTTP/1.1\r\nHost: {}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {}\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: binary\r\n\r\n",
         path, domain, ws_key
     );
-
     match tokio::time::timeout(timeout, write_half.write_all(req.as_bytes())).await {
         Ok(Ok(())) => {}
         Ok(Err(e)) => return Err(WsError::Io(e)),
         Err(_) => return Err(WsError::Timeout),
     }
-
     let mut bufreader = BufReader::with_capacity(4096, read_half);
+    let (status_code, first_line, headers) =
+        read_http_response(&mut bufreader, timeout).await?;
+    if status_code == 101 {
+        return Ok(RawWebSocket {
+            reader: tokio::sync::Mutex::new(WsReader::Tls(bufreader)),
+            writer: tokio::sync::Mutex::new(WsWriter::Tls(write_half)),
+            frag: tokio::sync::Mutex::new(Vec::new()),
+            closed: AtomicBool::new(false),
+            secure: true,
+        });
+    }
+    let location = headers.get("location").cloned().unwrap_or_default();
+    Err(WsError::Handshake(WsHandshakeError {
+        status_code,
+        status_line: first_line,
+        headers,
+        location,
+    }))
+}
 
-    // читаем заголовки строками
+async fn handshake_plain(
+    read_half: tokio::io::ReadHalf<TcpStream>,
+    mut write_half: tokio::io::WriteHalf<TcpStream>,
+    domain: &str,
+    path: &str,
+    timeout: Duration,
+) -> Result<RawWebSocket, WsError> {
+    let mut ws_key_bytes = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut ws_key_bytes);
+    let ws_key = base64::engine::general_purpose::STANDARD.encode(ws_key_bytes);
+    let req = format!(
+        "GET {} HTTP/1.1\r\nHost: {}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {}\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: binary\r\n\r\n",
+        path, domain, ws_key
+    );
+    match tokio::time::timeout(timeout, write_half.write_all(req.as_bytes())).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Err(WsError::Io(e)),
+        Err(_) => return Err(WsError::Timeout),
+    }
+    let mut bufreader = BufReader::with_capacity(4096, read_half);
+    let (status_code, first_line, headers) =
+        read_http_response(&mut bufreader, timeout).await?;
+    if status_code == 101 {
+        return Ok(RawWebSocket {
+            reader: tokio::sync::Mutex::new(WsReader::Plain(bufreader)),
+            writer: tokio::sync::Mutex::new(WsWriter::Plain(write_half)),
+            frag: tokio::sync::Mutex::new(Vec::new()),
+            closed: AtomicBool::new(false),
+            secure: false,
+        });
+    }
+    let location = headers.get("location").cloned().unwrap_or_default();
+    Err(WsError::Handshake(WsHandshakeError {
+        status_code,
+        status_line: first_line,
+        headers,
+        location,
+    }))
+}
+
+async fn read_http_response<R: AsyncReadExt + Unpin>(
+    bufreader: &mut BufReader<R>,
+    timeout: Duration,
+) -> Result<(i32, String, HashMap<String, String>), WsError> {
     let mut response_lines: Vec<String> = Vec::new();
     let read_result = tokio::time::timeout(timeout, async {
         loop {
-            let line = read_line(&mut bufreader).await?;
+            let line = read_line(bufreader).await?;
             let line = line.trim_end_matches(['\r', '\n']).to_string();
             if line.is_empty() {
                 break;
@@ -602,13 +712,11 @@ pub async fn ws_connect_once(
         Ok::<(), WsError>(())
     })
     .await;
-
     match read_result {
         Ok(Ok(())) => {}
         Ok(Err(e)) => return Err(e),
         Err(_) => return Err(WsError::Timeout),
     }
-
     if response_lines.is_empty() {
         return Err(WsError::Handshake(WsHandshakeError {
             status_code: 0,
@@ -617,22 +725,12 @@ pub async fn ws_connect_once(
             location: String::new(),
         }));
     }
-
     let first_line = response_lines[0].clone();
     let parts: Vec<&str> = first_line.splitn(3, ' ').collect();
     let mut status_code = 0;
     if parts.len() >= 2 {
         status_code = parts[1].parse::<i32>().unwrap_or(0);
     }
-
-    if status_code == 101 {
-        return Ok(RawWebSocket {
-            reader: tokio::sync::Mutex::new(bufreader),
-            writer: tokio::sync::Mutex::new(write_half),
-            closed: AtomicBool::new(false),
-        });
-    }
-
     let mut headers = HashMap::new();
     for hl in &response_lines[1..] {
         if let Some(idx) = hl.find(':') {
@@ -642,13 +740,7 @@ pub async fn ws_connect_once(
             );
         }
     }
-    let location = headers.get("location").cloned().unwrap_or_default();
-    Err(WsError::Handshake(WsHandshakeError {
-        status_code,
-        status_line: first_line,
-        headers,
-        location,
-    }))
+    Ok((status_code, first_line, headers))
 }
 
 async fn read_line<R: AsyncReadExt + Unpin>(reader: &mut R) -> Result<String, WsError> {
@@ -673,6 +765,77 @@ async fn read_line<R: AsyncReadExt + Unpin>(reader: &mut R) -> Result<String, Ws
     Ok(String::from_utf8_lossy(&buf).to_string())
 }
 
+// wsConnectOnce — заголовки 1-в-1 как в Python raw_websocket.py (без User-Agent).
+pub async fn ws_connect_once(
+    dial_addr: &str,
+    domain: &str,
+    path: &str,
+    timeout: Duration,
+) -> Result<RawWebSocket, WsError> {
+    let secure = !DISABLE_SECURE.load(Ordering::Relaxed);
+    ws_connect_once_full(dial_addr, domain, path, timeout, None, secure).await
+}
+
+pub async fn ws_connect_once_full(
+    dial_addr: &str,
+    domain: &str,
+    path: &str,
+    timeout: Duration,
+    sni: Option<&str>,
+    secure: bool,
+) -> Result<RawWebSocket, WsError> {
+    if dial_addr.is_empty() {
+        return Err(WsError::Other("empty dial address".to_string()));
+    }
+    let path = if path.is_empty() { WS_PATH } else { path };
+    let target_addr = if secure {
+        format!("{}:443", dial_addr)
+    } else {
+        format!("{}:80", dial_addr)
+    };
+
+    let raw_conn = match tokio::time::timeout(timeout, TcpStream::connect(&target_addr)).await {
+        Ok(Ok(c)) => c,
+        Ok(Err(e)) => return Err(WsError::Io(e)),
+        Err(_) => return Err(WsError::Timeout),
+    };
+    set_sock_opts(&raw_conn);
+
+    if !secure {
+        let (read_half, write_half) = tokio::io::split(raw_conn);
+        return handshake_plain(read_half, write_half, domain, path, timeout).await;
+    }
+
+    let sni_name = sni.unwrap_or(domain);
+    let use_fronting = sni.is_some();
+    let cfg = if use_fronting {
+        TLS_CONFIG_FRONTING.clone()
+    } else {
+        TLS_CONFIG.clone()
+    };
+    let connector = TlsConnector::from(cfg);
+    let sni_server = server_name(sni_name);
+
+    let handshake_timeout = ws_handshake_timeout(timeout);
+    let tls_conn =
+        match tokio::time::timeout(handshake_timeout, connector.connect(sni_server, raw_conn)).await {
+            Ok(Ok(c)) => c,
+            Ok(Err(e)) => {
+                if e.kind() != std::io::ErrorKind::ConnectionReset {
+                    ldebug!(" ws tls fail {} via {}: {}", domain, dial_addr, e);
+                }
+                return Err(WsError::Io(e));
+            }
+            Err(_) => {
+                ldebug!(" ws tls fail {} via {}: timeout", domain, dial_addr);
+                return Err(WsError::Timeout);
+            }
+        };
+
+    let (read_half, write_half) = tokio::io::split(tls_conn);
+    handshake_tls(read_half, write_half, domain, path, timeout).await
+}
+
 // wsConnect: пытается ip, при необходимости резолвит DoH
 pub async fn ws_connect(
     ip: &str,
@@ -680,8 +843,20 @@ pub async fn ws_connect(
     path: &str,
     timeout: f64,
 ) -> Result<RawWebSocket, WsError> {
-    let path = if path.is_empty() { "/apiws" } else { path };
+    ws_connect_full_opts(ip, domain, path, timeout, None, None).await
+}
+
+pub async fn ws_connect_full_opts(
+    ip: &str,
+    domain: &str,
+    path: &str,
+    timeout: f64,
+    sni: Option<&str>,
+    secure_opt: Option<bool>,
+) -> Result<RawWebSocket, WsError> {
+    let path = if path.is_empty() { WS_PATH } else { path };
     let attempt_timeout = ws_connect_timeout(timeout);
+    let secure = secure_opt.unwrap_or(!DISABLE_SECURE.load(Ordering::Relaxed));
 
     let primary_addr = if ip.trim().is_empty() {
         domain.to_string()
@@ -689,13 +864,21 @@ pub async fn ws_connect(
         ip.trim().to_string()
     };
 
-    match ws_connect_once(&primary_addr, domain, path, attempt_timeout).await {
+    match ws_connect_once_full(&primary_addr, domain, path, attempt_timeout, sni, secure).await {
         Ok(ws) => return Ok(ws),
         Err(e) => {
             if primary_addr == domain && primary_addr.parse::<IpAddr>().is_err() {
                 if let Some(resolved) = crate::cfproxy::resolve_doh(domain).await {
                     if !resolved.is_empty() && resolved != primary_addr {
-                        return ws_connect_once(&resolved, domain, path, attempt_timeout).await;
+                        return ws_connect_once_full(
+                            &resolved,
+                            domain,
+                            path,
+                            attempt_timeout,
+                            sni,
+                            secure,
+                        )
+                        .await;
                     }
                 }
             }
@@ -704,12 +887,60 @@ pub async fn ws_connect(
     }
 }
 
-// connectOneWS: перебор доменов
+// connectOneWS: перебор доменов (pool refill path, fronting-first как в оригинале)
 pub async fn connect_one_ws(ip: &str, domains: &[String]) -> Option<RawWebSocket> {
+    connect_one_ws_full(ip, domains, WS_PATH, WS_POOL_CONNECT_TIMEOUT).await
+}
+
+pub async fn connect_one_ws_full(
+    ip: &str,
+    domains: &[String],
+    path: &str,
+    timeout: f64,
+) -> Option<RawWebSocket> {
+    // Поведение pool._connect_one: сначала fronting (sni=sprinthost.ru),
+    // затем обычное соединение; Timeout/Reset → fronting fallback.
+    let fronting_first = crate::proxy::ws_pool_fronting_first();
     for d in domains {
-        if let Ok(ws) = ws_connect(ip, d, "/apiws", WS_POOL_CONNECT_TIMEOUT).await {
-            return Some(ws);
+        if fronting_first {
+            if let Some(ws) = connect_fronted(ip, d, path).await {
+                return Some(ws);
+            }
+        }
+        match ws_connect_full_opts(ip, d, path, timeout, None, Some(true)).await {
+            Ok(ws) => {
+                crate::proxy::set_ws_pool_fronting_first(false);
+                return Some(ws);
+            }
+            Err(WsError::Timeout) | Err(WsError::Io(_)) => {
+                if fronting_first {
+                    // как в оригинале: при fronting-first таймаут → сразу fronted
+                    return connect_fronted(ip, d, path).await;
+                }
+                if let Some(ws) = connect_fronted(ip, d, path).await {
+                    return Some(ws);
+                }
+            }
+            Err(WsError::Handshake(h)) => {
+                if h.is_redirect() {
+                    continue;
+                }
+                return None;
+            }
+            Err(_) => return None,
         }
     }
     None
+}
+
+pub async fn connect_fronted(ip: &str, domain: &str, path: &str) -> Option<RawWebSocket> {
+    let path = if path.is_empty() { WS_PATH } else { path };
+    match ws_connect_full_opts(ip, domain, path, WS_POOL_FRONTING_TIMEOUT, Some(FRONTING_SNI), Some(true)).await {
+        Ok(ws) => {
+            STATS.connections_fronting.fetch_add(1, Ordering::Relaxed);
+            crate::proxy::set_ws_pool_fronting_first(true);
+            Some(ws)
+        }
+        Err(_) => None,
+    }
 }

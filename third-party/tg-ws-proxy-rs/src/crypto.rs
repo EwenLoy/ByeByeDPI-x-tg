@@ -110,31 +110,33 @@ impl MsgSplitter {
         self.stream.apply_keystream(&mut decrypted);
         self.plain_buf.extend_from_slice(&decrypted);
 
+        // Порт MsgSplitter.split из proxy/bridge.py: идём по буферу с offset,
+        // а не удаляем каждый пакет с начала (иначе O(N^2) на чанке с кучей
+        // мелких пакетов). Один trailing del в конце — O(N).
         let mut parts: Vec<Vec<u8>> = Vec::new();
-        while !self.cipher_buf.is_empty() {
-            let pkt_len = self.next_packet_len();
-            if pkt_len < 0 {
-                break;
+        let mut offset: usize = 0;
+        let buf_len = self.cipher_buf.len();
+        while offset < buf_len {
+            let avail = buf_len - offset;
+            let pkt_len = self.next_packet_len_at(offset, avail);
+            match pkt_len {
+                None => break,
+                Some(0) => {
+                    parts.push(self.cipher_buf[offset..].to_vec());
+                    offset = buf_len;
+                    self.disabled = true;
+                    break;
+                }
+                Some(n) => {
+                    parts.push(self.cipher_buf[offset..offset + n].to_vec());
+                    offset += n;
+                }
             }
-            if pkt_len == 0 {
-                parts.push(self.cipher_buf.clone());
-                self.cipher_buf.clear();
-                self.plain_buf.clear();
-                self.disabled = true;
-                break;
-            }
-            let pkt_len = pkt_len as usize;
-            if self.cipher_buf.len() < pkt_len {
-                break;
-            }
-            parts.push(self.cipher_buf[..pkt_len].to_vec());
-            self.cipher_buf.drain(..pkt_len);
-            self.plain_buf.drain(..pkt_len);
         }
 
-        if self.cipher_buf.is_empty() {
-            self.cipher_buf.clear();
-            self.plain_buf.clear();
+        if offset > 0 {
+            self.cipher_buf.drain(..offset);
+            self.plain_buf.drain(..offset);
         }
         parts
     }
@@ -149,16 +151,72 @@ impl MsgSplitter {
         vec![tail]
     }
 
+    fn next_packet_len_at(&self, offset: usize, avail: usize) -> Option<usize> {
+        if avail == 0 || self.plain_buf.len() <= offset {
+            return None;
+        }
+        match self.proto_type {
+            PROTO_ABRIDGED => self.next_abridged_len_at(offset, avail),
+            PROTO_INTERMEDIATE | PROTO_PADDED_INTERMEDIATE => {
+                self.next_intermediate_len_at(offset, avail)
+            }
+            _ => Some(0),
+        }
+    }
+
+    fn next_abridged_len_at(&self, offset: usize, avail: usize) -> Option<usize> {
+        // Порт _next_abridged_len: long-form при first == 0x7F **или** 0xFF.
+        let first = self.plain_buf[offset];
+        let (header_len, payload_len) = if first == 0x7F || first == 0xFF {
+            if avail < 4 {
+                return None;
+            }
+            let payload = ((self.plain_buf[offset + 1] as usize)
+                | ((self.plain_buf[offset + 2] as usize) << 8)
+                | ((self.plain_buf[offset + 3] as usize) << 16))
+                * 4;
+            (4usize, payload)
+        } else {
+            let payload = (first as usize & 0x7F) * 4;
+            (1usize, payload)
+        };
+        if payload_len == 0 {
+            return Some(0);
+        }
+        let pkt_len = header_len + payload_len;
+        if avail < pkt_len {
+            return None;
+        }
+        Some(pkt_len)
+    }
+
+    fn next_intermediate_len_at(&self, offset: usize, avail: usize) -> Option<usize> {
+        if avail < 4 {
+            return None;
+        }
+        let payload_len =
+            (LittleEndian::read_u32(&self.plain_buf[offset..offset + 4]) & 0x7FFFFFFF) as usize;
+        if payload_len == 0 {
+            return Some(0);
+        }
+        let pkt_len = 4 + payload_len;
+        if avail < pkt_len {
+            return None;
+        }
+        Some(pkt_len)
+    }
+
+    #[allow(dead_code)]
     fn next_packet_len(&self) -> i64 {
         if self.plain_buf.is_empty() {
             return -1;
         }
         match self.proto_type {
             PROTO_ABRIDGED => {
-                let first = self.plain_buf[0] & 0x7F;
+                let raw_first = self.plain_buf[0];
                 let header_len;
                 let payload_len;
-                if first == 0x7F {
+                if raw_first == 0x7F || raw_first == 0xFF {
                     if self.plain_buf.len() < 4 {
                         return -1;
                     }
@@ -168,6 +226,7 @@ impl MsgSplitter {
                         * 4;
                     header_len = 4;
                 } else {
+                    let first = raw_first & 0x7F;
                     payload_len = (first as i64) * 4;
                     header_len = 1;
                 }

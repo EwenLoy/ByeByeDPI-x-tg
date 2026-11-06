@@ -8,6 +8,7 @@ import android.net.Uri
 import android.widget.Toast
 import io.github.romanvht.byedpi.R
 import io.github.romanvht.byedpi.ewenloy.tgws.EwenloyTgWsServiceExtension
+import io.github.romanvht.byedpi.ewenloy.tgws.NativeProxy
 import io.github.romanvht.byedpi.ewenloy.tgws.TgWsProxyService
 
 /**
@@ -28,8 +29,16 @@ object TelegramProxyLink {
         }
 
         val secret = EwenloyTgWsServiceExtension.ensureSecret(prefs)
+        // Ядро само знает правильный префикс: dd для обычного MTProto и ee+домен,
+        // если включён FakeTLS. Хардкод "dd" ломал бы ссылку при включённом FakeTLS.
+        val nativeSecret = try {
+            NativeProxy.getSecretWithPrefix()
+        } catch (_: Throwable) {
+            null
+        }
+        val fullSecret = nativeSecret?.takeIf { it.length >= 34 } ?: "dd$secret"
         val uri = Uri.parse(
-            "tg://proxy?server=127.0.0.1&port=${EwenloyTgWsServiceExtension.TG_WS_PORT}&secret=dd$secret"
+            "tg://proxy?server=127.0.0.1&port=${EwenloyTgWsServiceExtension.TG_WS_PORT}&secret=$fullSecret"
         )
 
         val intent = Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
