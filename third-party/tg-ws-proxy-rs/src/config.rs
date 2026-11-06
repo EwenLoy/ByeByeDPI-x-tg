@@ -235,8 +235,48 @@ pub fn human_bytes(n: i64) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Logger (Android log + stderr, 1-в-1 префиксы)
+// Logger (Android log + файл + stderr, 1-в-1 префиксы)
 // ---------------------------------------------------------------------------
+
+/// Каталог для файлового лога. Отдельный лок, а не CFPROXY: emit() зовётся
+/// и из мест, где CFPROXY уже под write-локом — иначе был бы самодедлок.
+pub static LOG_DIR: Lazy<RwLock<String>> = Lazy::new(|| RwLock::new(String::new()));
+
+static NATIVE_LOG: Lazy<parking_lot::Mutex<Option<std::fs::File>>> =
+    Lazy::new(|| parking_lot::Mutex::new(None));
+
+const NATIVE_LOG_NAME: &str = "tgws-native.log";
+const NATIVE_LOG_PREV: &str = "tgws-native.1.log";
+const NATIVE_LOG_MAX_BYTES: u64 = 256 * 1024;
+
+/// Пишем строку в файл: на части прошивок (EMUI) приложению недоступен logcat,
+/// и без этого нативные сообщения не видит вообще никто.
+fn file_log_line(line: &str) {
+    let dir = LOG_DIR.read().trim().to_string();
+    if dir.is_empty() {
+        return;
+    }
+    let path = format!("{}/{}", dir.trim_end_matches('/'), NATIVE_LOG_NAME);
+    let mut guard = NATIVE_LOG.lock();
+    if guard.is_none() {
+        if let Ok(meta) = std::fs::metadata(&path) {
+            if meta.len() > NATIVE_LOG_MAX_BYTES {
+                let backup = format!("{}/{}", dir.trim_end_matches('/'), NATIVE_LOG_PREV);
+                let _ = std::fs::rename(&path, backup);
+            }
+        }
+        *guard = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .ok();
+    }
+    if let Some(file) = guard.as_mut() {
+        use std::io::Write;
+        // Эпоха с миллисекундами: Kotlin на экране логов переводит в локальное время.
+        let _ = writeln!(file, "{:.3} {}", now_unix_f64(), line);
+    }
+}
 
 #[cfg(target_os = "android")]
 fn android_log_line(line: &str) {
@@ -266,6 +306,7 @@ fn emit(prefix: &str, msg: &str) {
     let line = format!("{}{}", prefix, msg);
     eprintln!("{}", line);
     android_log_line(&line);
+    file_log_line(&line);
 }
 
 pub fn log_info(msg: &str) {

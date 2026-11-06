@@ -196,6 +196,8 @@ pub extern "C" fn SetPoolSize(size: c_int) {
 pub unsafe extern "C" fn SetCfProxyCacheDir(c_cache_dir: *const c_char) {
     let dir = cstr_to_string(c_cache_dir);
     CFPROXY.write().cache_dir = dir.trim().to_string();
+    // Тот же каталог используем для файлового лога ядра (logcat на EMUI недоступен).
+    *LOG_DIR.write() = dir.trim().to_string();
 }
 
 /// # Safety

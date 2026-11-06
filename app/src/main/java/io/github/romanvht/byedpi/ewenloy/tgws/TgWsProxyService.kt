@@ -97,7 +97,7 @@ class TgWsProxyService : Service() {
         private const val NETWORK_DEBOUNCE_MS = 30_000L
         private const val HEARTBEAT_MS = 60_000L
         private const val HEALTH_CHECK_MS = 5_000L
-        private const val PORT_PROBE_TIMEOUT_MS = 400
+        private const val PORT_PROBE_TIMEOUT_MS = 1500
 
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning

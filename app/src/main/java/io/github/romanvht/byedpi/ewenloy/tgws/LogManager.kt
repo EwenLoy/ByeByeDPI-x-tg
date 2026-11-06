@@ -39,6 +39,8 @@ object LogManager {
         override fun initialValue() = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
     }
 
+    private val EPOCH_PREFIX = Regex("^(\\d{10,}(?:\\.\\d+)?)\\s+")
+
     /**
      * Событие уровня приложения. Пишется в файл всегда — не зависит от того,
      * доступен ли logcat на устройстве, и переживает смерть процесса.
@@ -192,6 +194,42 @@ object LogManager {
         } catch (_: Exception) {
             ""
         }
+    }
+
+    /**
+     * Лог самого нативного ядра. Пишется им напрямую в cacheDir, потому что
+     * на части прошивок (EMUI/Huawei) приложению недоступен logcat и строки
+     * TgWsProxy до Kotlin не доходят.
+     */
+    fun readNativeLog(context: Context, maxLines: Int = 600): String {
+        val files = listOf(
+            File(context.cacheDir, "tgws-native.1.log"),
+            File(context.cacheDir, "tgws-native.log")
+        )
+        val builder = StringBuilder()
+        for (file in files) {
+            if (!file.exists()) continue
+            val text = try {
+                file.readText()
+            } catch (_: Exception) {
+                continue
+            }
+            for (line in text.lineSequence()) {
+                if (line.isBlank()) continue
+                builder.append(formatNativeLine(line)).append('\n')
+            }
+        }
+        val lines = builder.toString().trimEnd().lines()
+        return if (lines.size > maxLines) lines.takeLast(maxLines).joinToString("\n")
+        else lines.joinToString("\n")
+    }
+
+    /** Натив пишет "<эпоха>.<мс> текст" — показываем локальное время, как в основном логе. */
+    private fun formatNativeLine(line: String): String {
+        val match = EPOCH_PREFIX.find(line) ?: return line
+        val seconds = match.groupValues[1].toDoubleOrNull() ?: return line
+        val stamp = timeFormat.get()?.format(Date((seconds * 1000).toLong())) ?: return line
+        return "$stamp " + line.substring(match.range.last + 1)
     }
 
     /** Аварийный вариант: показать хотя бы предыдущую сессию из ротации. */

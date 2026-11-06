@@ -69,8 +69,8 @@ class TgWsLogsActivity : BaseActivity() {
         logsTextView.removeCallbacks(updateRunnable)
     }
 
-    /** Файл полнее памяти: в нём и события приложения, и строки ядра с временем. */
-    private fun formatLogs(): String {
+    /** События приложения из файла; натив приходит отдельным блоком. */
+    private fun appLogText(): String {
         val file = LogManager.getLogFile(this)
         val length = file?.length() ?: -1L
         if (length >= 0) {
@@ -101,14 +101,26 @@ class TgWsLogsActivity : BaseActivity() {
         return ""
     }
 
-    private fun shareText(): String {
-        val current = LogManager.readLogFile(this)
-        if (current.isNotBlank()) return current
-        val previous = LogManager.readPreviousLogFile(this)
-        if (previous.isNotBlank()) return previous
-        val memory = formatLogs()
-        if (memory.isNotBlank()) return memory
-        return getString(R.string.tg_ws_logs_empty)
+    private fun formatLogs(): String = buildString {
+        append(appLogText())
+        val native = LogManager.readNativeLog(this@TgWsLogsActivity, MAX_DISPLAY_LINES)
+        if (native.isNotBlank()) {
+            if (isNotEmpty()) append("\n\n")
+            append("=== ядро (tgws-native.log) ===\n").append(native)
+        }
+    }
+
+    private fun shareText(): String = buildString {
+        val app = LogManager.readLogFile(this@TgWsLogsActivity).ifBlank {
+            LogManager.readPreviousLogFile(this@TgWsLogsActivity)
+        }
+        append(app)
+        val native = LogManager.readNativeLog(this@TgWsLogsActivity, maxLines = 5000)
+        if (native.isNotBlank()) {
+            if (isNotEmpty()) append("\n\n")
+            append("=== ядро (tgws-native.log) ===\n").append(native)
+        }
+        if (isEmpty()) append(getString(R.string.tg_ws_logs_empty))
     }
 
     private fun renderLogs() {
