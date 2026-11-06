@@ -14,6 +14,7 @@ interface ProxyLibrary : Library {
     fun SetPoolSize(size: Int)
     fun SetCfProxyCacheDir(cacheDir: String)
     fun SetCfProxyConfig(enabled: Int, priority: Int, userDomain: String)
+    fun SetDisableSecure(v: Int)
     fun GetSecretWithPrefix(): Pointer?
     fun GetStats(): Pointer?
     fun FreeString(p: Pointer)
@@ -30,6 +31,14 @@ object NativeProxy {
 
     fun setPoolSize(size: Int) {
         ProxyLibrary.INSTANCE.SetPoolSize(size)
+    }
+
+    /**
+     * false — соединения к Cloudflare идут по TLS на 443 (нормальный режим).
+     * true — плейн-HTTP на 80: годно только для отладки, DPI рвёт такое за десятки секунд.
+     */
+    fun setDisableSecure(disabled: Boolean) {
+        ProxyLibrary.INSTANCE.SetDisableSecure(if (disabled) 1 else 0)
     }
 
     fun setCfProxyCacheDir(cacheDir: String) {

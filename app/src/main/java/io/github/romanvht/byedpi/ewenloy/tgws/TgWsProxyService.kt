@@ -214,6 +214,10 @@ class TgWsProxyService : Service() {
                 NativeProxy.setPoolSize(poolSize)
                 NativeProxy.setCfProxyCacheDir(cacheDir.absolutePath)
                 NativeProxy.setCfProxyConfig(cfEnabled, cfPriority, cfDomain)
+                // Явно требуем TLS: у апстрима флаг «no secure» по умолчанию включён,
+                // и ядро ходило к Cloudflare по плейн-HTTP на 80 — такое рвётся DPI
+                // за десятки секунд (в логах: "upstream: ws_close" через 36-40 с).
+                NativeProxy.setDisableSecure(false)
                 val result = NativeProxy.startProxy(bindIp, port, ips, secretKey, 1)
                 if (result == 0) {
                     autoRestartAttempts = 0
