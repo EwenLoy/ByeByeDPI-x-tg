@@ -1,4 +1,7 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.Properties
 
 plugins {
@@ -36,8 +39,8 @@ val buildGitHash: String = runCatching {
     output.ifEmpty { "nogit" }
 }.getOrElse { "nogit" }
 
-val buildTimeStamp: String = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US)
-    .format(java.util.Date())
+val buildTimeStamp: String = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
+    .format(Date())
 
 val buildStamp: String = "$buildGitHash | $buildTimeStamp"
 
