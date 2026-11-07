@@ -37,6 +37,8 @@ object DiagnosticUtils {
             ))
             appendLine(value(context, R.string.diagnostic_kernel_version, Os.uname().release))
             appendLine(value(context, R.string.diagnostic_app_version, BuildConfig.VERSION_NAME))
+            // Build stamp: lets us tell user builds apart without asking.
+            appendLine("Build: ${BuildConfig.VERSION_CODE} | ${BuildConfig.BUILD_STAMP}")
 
             appendLine()
             appendLine(context.getString(R.string.diagnostic_app_settings))

@@ -113,7 +113,11 @@ class TgWsProxyService : Service() {
         super.onCreate()
         createNotificationChannel()
         LogManager.startListening(this)
-        LogManager.app("service: onCreate")
+        LogManager.app(
+            "service: onCreate | " + io.github.romanvht.byedpi.BuildConfig.VERSION_NAME +
+                " (" + io.github.romanvht.byedpi.BuildConfig.VERSION_CODE + ") | " +
+                io.github.romanvht.byedpi.BuildConfig.BUILD_STAMP
+        )
         registerNetworkCallback()
     }
 

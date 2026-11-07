@@ -127,7 +127,15 @@ object LogManager {
                 previous.delete()
                 file.renameTo(previous)
             }
+            val freshFile = !file.exists() || file.length() == 0L
             logWriter = java.io.FileOutputStream(file, true).bufferedWriter(Charsets.UTF_8)
+            if (freshFile) {
+                val stamp = io.github.romanvht.byedpi.BuildConfig.BUILD_STAMP
+                val ver = io.github.romanvht.byedpi.BuildConfig.VERSION_NAME
+                val code = io.github.romanvht.byedpi.BuildConfig.VERSION_CODE
+                logWriter?.write("=== $ver ($code) | $stamp ===\n")
+                logWriter?.flush()
+            }
         } catch (e: Exception) {
             Log.e("LogManager", "Failed to open log file", e)
         }

@@ -342,15 +342,9 @@ class MainActivity : BaseActivity() {
                 true
             }
 
+            // logcat export is useless on OEM builds (only our own process is visible):
+            // open our file log with app events + native core log instead
             R.id.action_save_logs -> {
-                val intent = Intent(this, FileActivity::class.java)
-                intent.putExtra(FileActivity.EXTRA_MODE, FileActivity.MODE_CREATE)
-                intent.putExtra(FileActivity.EXTRA_TYPE, FileActivity.TYPE_LOGS)
-                logsRegister.launch(intent)
-                true
-            }
-
-            R.id.action_tg_ws_logs -> {
                 startActivity(Intent(this, TgWsLogsActivity::class.java))
                 true
             }

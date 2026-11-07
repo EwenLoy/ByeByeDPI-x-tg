@@ -24,6 +24,23 @@ val releaseKeyPassword = signingSecret("KEY_PASSWORD")
 val releaseSigningReady = releaseKeystoreFile.exists() &&
         releaseKeystorePassword != null && releaseKeyAlias != null && releaseKeyPassword != null
 
+// Метка сборки: попадает в отчёт диагностики и в шапку файлового лога,
+// чтобы по присланному логу сразу было видно, какая именно сборка у человека.
+val buildGitHash: String = runCatching {
+    val process = ProcessBuilder("git", "rev-parse", "--short", "HEAD")
+        .directory(rootDir)
+        .redirectErrorStream(true)
+        .start()
+    val output = process.inputStream.bufferedReader().readText().trim()
+    process.waitFor()
+    output.ifEmpty { "nogit" }
+}.getOrElse { "nogit" }
+
+val buildTimeStamp: String = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US)
+    .format(java.util.Date())
+
+val buildStamp: String = "$buildGitHash | $buildTimeStamp"
+
 android {
     namespace = "io.github.romanvht.byedpi"
     //noinspection GradleDependency
@@ -36,6 +53,9 @@ android {
         targetSdk = 34
         versionCode = 26
         versionName = "2.0.6"
+
+        // Build stamp: shows up in diagnostics and in the log header.
+        buildConfigField("String", "BUILD_STAMP", "\"$buildStamp\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
