@@ -1226,7 +1226,14 @@ async fn try_cfproxy_base_domain(
     let domain = format!("kws{}.{}", dc, base_domain);
     ldebug!(" CF try {}", domain);
 
-    let (ws, resolved_ip, err) = cf_connect_domain(&domain, ws_path, 5.0).await;
+    // SNI = базовый домен, Host = kwsN.<домен>: DPI режет ClientHello с kwsN.*.
+    let (ws, resolved_ip, err) = cf_connect_domain(
+        &domain,
+        ws_path,
+        5.0,
+        Some(base_domain.as_str()),
+    )
+    .await;
     if let Some(e) = err {
         // Cooldown ставим ТОЛЬКО при HTTP 429, иначе любой reset/timeout
         // выжигал бы домены и плодил лавину cooldown.

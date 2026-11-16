@@ -776,6 +776,20 @@ pub async fn ws_connect_once(
     ws_connect_once_full(dial_addr, domain, path, timeout, None, secure).await
 }
 
+// CF-прокси: TLS SNI отделён от HTTP Host.
+// DPI режет ClientHello с именем kwsN.<домен>, поэтому в SNI уходит базовый домен,
+// а Host остаётся kwsN.<домен> — Cloudflare маршрутизирует по Host.
+pub async fn ws_connect_once_sni(
+    dial_addr: &str,
+    domain: &str,
+    path: &str,
+    timeout: Duration,
+    tls_name: &str,
+) -> Result<RawWebSocket, WsError> {
+    let secure = !DISABLE_SECURE.load(Ordering::Relaxed);
+    ws_connect_once_full(dial_addr, domain, path, timeout, Some(tls_name), secure).await
+}
+
 pub async fn ws_connect_once_full(
     dial_addr: &str,
     domain: &str,

@@ -1,5 +1,5 @@
 use crate::config::*;
-use crate::ws::{is_http_status_error, ws_connect_once, RawWebSocket, WsError};
+use crate::ws::{is_http_status_error, ws_connect_once, ws_connect_once_sni, RawWebSocket, WsError};
 use crate::{ldebug, lerror, linfo, lwarn};
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -579,6 +579,7 @@ pub async fn cf_connect_domain(
     domain: &str,
     path: &str,
     timeout: f64,
+    tls_name: Option<&str>,
 ) -> (Option<RawWebSocket>, String, Option<WsError>) {
     let path = if path.is_empty() { "/apiws" } else { path };
 
@@ -589,7 +590,11 @@ pub async fn cf_connect_domain(
     }
 
     let host_timeout = new_timed_attempt_timeout(phase_timeout, phase_timeout);
-    match ws_connect_once(domain, domain, path, host_timeout).await {
+    let host_attempt = match tls_name {
+        Some(name) => ws_connect_once_sni(domain, domain, path, host_timeout, name).await,
+        None => ws_connect_once(domain, domain, path, host_timeout).await,
+    };
+    match host_attempt {
         Ok(ws) => return (Some(ws), String::new(), None),
         Err(host_err) => {
             if is_http_status_error(&host_err, 429) {
@@ -602,7 +607,13 @@ pub async fn cf_connect_domain(
             }
             ldebug!(" CF DNS {} -> {}", domain, resolved_ip);
             let ip_timeout = new_timed_attempt_timeout(phase_timeout, phase_timeout);
-            match ws_connect_once(&resolved_ip, domain, path, ip_timeout).await {
+            let ip_attempt = match tls_name {
+                Some(name) => {
+                    ws_connect_once_sni(&resolved_ip, domain, path, ip_timeout, name).await
+                }
+                None => ws_connect_once(&resolved_ip, domain, path, ip_timeout).await,
+            };
+            match ip_attempt {
                 Ok(ws) => (Some(ws), resolved_ip, None),
                 Err(e) => (None, resolved_ip, Some(e)),
             }
