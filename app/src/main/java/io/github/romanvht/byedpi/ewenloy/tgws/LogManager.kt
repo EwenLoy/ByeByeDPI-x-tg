@@ -59,6 +59,8 @@ object LogManager {
         logs.value = (logs.value + entry).takeLast(MAX_MEMORY_ENTRIES)
     }
 
+    fun isListening(): Boolean = job?.isActive == true
+
     fun startListening(context: Context? = null) {
         if (context != null) appContext = context.applicationContext
         ensureLogFile()
@@ -174,6 +176,8 @@ object LogManager {
 
     fun clearLogs() {
         logs.value = emptyList()
+        // Сбросить накопленные сообщения в канале
+        while (logChannel.tryReceive().isSuccess) { }
         // Закрываем поток перед обрезкой: иначе после truncate курсор остаётся
         // за концом файла и в лог попадает дыра из нулевых байтов.
         try {
@@ -183,6 +187,15 @@ object LogManager {
         logWriter = null
         try {
             logFile?.writeText("")
+        } catch (_: Exception) {
+        }
+        // Очистить native-логи ядра
+        try {
+            File(appContext?.cacheDir, "tgws-native.log")?.writeText("")
+        } catch (_: Exception) {
+        }
+        try {
+            File(appContext?.cacheDir, "tgws-native.1.log")?.delete()
         } catch (_: Exception) {
         }
         ensureLogFile()

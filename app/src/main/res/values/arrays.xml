@@ -81,6 +81,21 @@
         <item>8</item>
     </string-array>
 
+    <string-array name="tg_ws_buffer_sizes">
+        <item>64 KB</item>
+        <item>128 KB</item>
+        <item>256 KB</item>
+        <item>512 KB</item>
+        <item>1 MB</item>
+    </string-array>
+    <string-array name="tg_ws_buffer_size_values">
+        <item>64</item>
+        <item>128</item>
+        <item>256</item>
+        <item>512</item>
+        <item>1024</item>
+    </string-array>
+
     <array name="quick_tile_modes">
         <item name="bbd">ByeDPI</item>
         <item name="tgws">TG WS прокси</item>

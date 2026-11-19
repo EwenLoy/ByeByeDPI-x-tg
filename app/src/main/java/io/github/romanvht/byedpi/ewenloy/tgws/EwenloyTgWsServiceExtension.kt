@@ -10,7 +10,7 @@ import io.github.romanvht.byedpi.R
 
 /**
  * Bridge between ByeDPI services and TgWsProxyService.
- * Mirrors ProxyController from tg-ws-proxy-android — starts/stops via Intent.
+ * Passes all TG WS settings from SharedPreferences into the foreground service Intent.
  */
 class EwenloyTgWsServiceExtension {
 
@@ -34,9 +34,19 @@ class EwenloyTgWsServiceExtension {
 
         val ctx = context ?: return
         val secret = ensureSecret(preferences)
-        val poolSize = preferences.getString(PREF_POOL_SIZE, DEFAULT_POOL_SIZE.toString())?.toIntOrNull() ?: DEFAULT_POOL_SIZE
+        val poolSize = preferences.getString(PREF_POOL_SIZE, DEF_POOL)?.toIntOrNull() ?: DEF_POOL_INT
+        val bufferSizeKb = preferences.getString(PREF_BUFFER_SIZE, "256")?.toIntOrNull() ?: 256
         val cfEnabled = preferences.getBoolean(PREF_CF_ENABLED, true)
+        val cfH2Enabled = preferences.getBoolean(PREF_CF_H2, true)
         val cfDomain = if (cfEnabled) (preferences.getString(PREF_CF_DOMAIN, "") ?: "") else ""
+        val cfWorkerDomains = preferences.getString(PREF_CF_WORKER_DOMAINS, "") ?: ""
+        val fakeTlsDomain = preferences.getString(PREF_FAKETLS_DOMAIN, "") ?: ""
+        // По умолчанию — включено: соединения к Cloudflare идут на 80-й порт
+        // вместо TLS 443. Помогает там, где DPI режет TLS Handshake.
+        val disableSecure = preferences.getBoolean(PREF_DISABLE_SECURE, DEF_DISABLE_SECURE)
+        val testDc = preferences.getBoolean(PREF_TEST_DC, false)
+        val proxyProtocol = preferences.getBoolean(PREF_PROXY_PROTOCOL, false)
+        val verbose = preferences.getBoolean(PREF_VERBOSE, false)
         val dcIps = buildDcIps(preferences)
 
         ContextCompat.startForegroundService(ctx,
@@ -46,9 +56,16 @@ class EwenloyTgWsServiceExtension {
                 putExtra(TgWsProxyService.EXTRA_PORT, TG_WS_PORT)
                 putExtra(TgWsProxyService.EXTRA_IPS, dcIps)
                 putExtra(TgWsProxyService.EXTRA_POOL_SIZE, poolSize)
+                putExtra(TgWsProxyService.EXTRA_BUFFER_SIZE_KB, bufferSizeKb)
                 putExtra(TgWsProxyService.EXTRA_CFPROXY_ENABLED, cfEnabled)
-                putExtra(TgWsProxyService.EXTRA_CFPROXY_PRIORITY, true)
+                putExtra(TgWsProxyService.EXTRA_CFPROXY_H2, cfH2Enabled)
                 putExtra(TgWsProxyService.EXTRA_CFPROXY_DOMAIN, cfDomain)
+                putExtra(TgWsProxyService.EXTRA_CF_WORKER_DOMAINS, cfWorkerDomains)
+                putExtra(TgWsProxyService.EXTRA_FAKETLS_DOMAIN, fakeTlsDomain)
+                putExtra(TgWsProxyService.EXTRA_DISABLE_SECURE, disableSecure)
+                putExtra(TgWsProxyService.EXTRA_TEST_DC, testDc)
+                putExtra(TgWsProxyService.EXTRA_PROXY_PROTOCOL, proxyProtocol)
+                putExtra(TgWsProxyService.EXTRA_VERBOSE, verbose)
                 putExtra(TgWsProxyService.EXTRA_SECRET_KEY, secret)
             }
         )
@@ -68,9 +85,6 @@ class EwenloyTgWsServiceExtension {
         ctx.startService(Intent(ctx, TgWsProxyService::class.java).apply {
             action = TgWsProxyService.ACTION_STOP
         })
-        // Гасим и флаг «включено»: иначе кнопка на главном остаётся зелёной,
-        // а BootReceiver поднимает прокси после перезагрузки против воли юзера.
-        // При внутреннем перезапуске (refreshFromPreferences) флаг не трогаем.
         if (clearPreference) {
             preferences?.edit(commit = true) { putBoolean(EWENLOY_TG_WS_MODE_KEY, false) }
             enabled = false
@@ -79,10 +93,6 @@ class EwenloyTgWsServiceExtension {
         Log.i(TAG, "TgWsProxyService stop requested")
     }
 
-    /**
-     * Многострочная сводка для единого уведомления ByeDPI:
-     * "Telegram: WS туннель активен\nТрафик: 1.2MB · 3 сесс."
-     */
     fun statusLine(): String {
         val ctx = context ?: return ""
         val prefOn = preferences?.getBoolean(EWENLOY_TG_WS_MODE_KEY, false) ?: false
@@ -104,22 +114,21 @@ class EwenloyTgWsServiceExtension {
     // ---- helpers ----
 
     private fun buildDcIps(prefs: SharedPreferences): String {
-        if (prefs.getBoolean(PREF_CF_ENABLED, true)) return ""
         val isExp = prefs.getBoolean(PREF_EXPERIMENTAL_MODE, false)
         return buildList {
-            appendDc(1, prefs.getString(PREF_DC1, "") ?: "")
-            appendDc(2, prefs.getString(PREF_DC2, "") ?: "")
-            appendDc(3, prefs.getString(PREF_DC3, "") ?: "")
-            appendDc(4, prefs.getString(PREF_DC4, "") ?: "")
+            appendDc(1, prefs.getString(PREF_DC1, "149.154.175.50") ?: "")
+            appendDc(2, prefs.getString(PREF_DC2, "149.154.167.51") ?: "")
+            appendDc(3, prefs.getString(PREF_DC3, "149.154.175.100") ?: "")
+            appendDc(4, prefs.getString(PREF_DC4, "149.154.167.91") ?: "")
             if (isExp) {
-                appendDc(5,    prefs.getString(PREF_DC5, "") ?: "")
-                appendDc(203,  prefs.getString(PREF_DC203, "") ?: "")
-                appendDc(-1,   prefs.getString(PREF_DC1M, "") ?: "")
-                appendDc(-2,   prefs.getString(PREF_DC2M, "") ?: "")
-                appendDc(-3,   prefs.getString(PREF_DC3M, "") ?: "")
-                appendDc(-4,   prefs.getString(PREF_DC4M, "") ?: "")
-                appendDc(-5,   prefs.getString(PREF_DC5M, "") ?: "")
-                appendDc(-203, prefs.getString(PREF_DC203M, "") ?: "")
+                appendDc(5,    prefs.getString(PREF_DC5, "149.154.171.5") ?: "")
+                appendDc(203,  prefs.getString(PREF_DC203, "91.105.192.100") ?: "")
+                appendDc(-1,   prefs.getString(PREF_DC1M, "149.154.175.50") ?: "")
+                appendDc(-2,   prefs.getString(PREF_DC2M, "149.154.167.51") ?: "")
+                appendDc(-3,   prefs.getString(PREF_DC3M, "149.154.175.100") ?: "")
+                appendDc(-4,   prefs.getString(PREF_DC4M, "149.154.167.91") ?: "")
+                appendDc(-5,   prefs.getString(PREF_DC5M, "149.154.171.5") ?: "")
+                appendDc(-203, prefs.getString(PREF_DC203M, "91.105.192.100") ?: "")
             }
         }.joinToString(",")
     }
@@ -134,6 +143,11 @@ class EwenloyTgWsServiceExtension {
     companion object {
         private const val TAG = "EwenloyTgWsExt"
         const val TG_WS_PORT = 1082
+        private const val DEF_POOL = "4"
+        private const val DEF_POOL_INT = 4
+
+        /** По умолчанию TLS к Cloudflare выключен (порт 80) — так проходит на сетях с DPI. */
+        const val DEF_DISABLE_SECURE = true
 
         /** Секрет MTProto: существующий 32-символьный hex или новый. */
         fun ensureSecret(prefs: SharedPreferences): String {
@@ -154,9 +168,18 @@ class EwenloyTgWsServiceExtension {
 
         const val PREF_SECRET_KEY        = "tg_ws_secret_key"
         const val PREF_POOL_SIZE         = "tg_ws_pool_size"
+        const val PREF_BUFFER_SIZE       = "tg_ws_buffer_size"
         const val PREF_CF_ENABLED        = "tg_ws_cf_enabled"
+        const val PREF_CF_H2             = "tg_ws_cf_h2"
         const val PREF_CF_DOMAIN         = "tg_ws_cf_domain"
+        const val PREF_CF_WORKER_DOMAINS = "tg_ws_cf_worker_domains"
+        const val PREF_FAKETLS_DOMAIN    = "tg_ws_faketls_domain"
+        const val PREF_DISABLE_SECURE    = "tg_ws_disable_secure"
+        const val PREF_TEST_DC           = "tg_ws_test_dc"
+        const val PREF_PROXY_PROTOCOL    = "tg_ws_proxy_protocol"
+        const val PREF_VERBOSE           = "tg_ws_verbose"
         const val PREF_EXPERIMENTAL_MODE = "tg_ws_experimental_mode"
+
         const val PREF_DC1   = "tg_ws_dc1";  const val PREF_DC2   = "tg_ws_dc2"
         const val PREF_DC3   = "tg_ws_dc3";  const val PREF_DC4   = "tg_ws_dc4"
         const val PREF_DC5   = "tg_ws_dc5";  const val PREF_DC203 = "tg_ws_dc203"
@@ -168,7 +191,5 @@ class EwenloyTgWsServiceExtension {
         const val TG_STATUS_IDLE     = "idle"
         const val TG_STATUS_WS       = "ws"
         const val TG_STATUS_DIRECT   = "direct"
-
-        private const val DEFAULT_POOL_SIZE = 4
     }
 }

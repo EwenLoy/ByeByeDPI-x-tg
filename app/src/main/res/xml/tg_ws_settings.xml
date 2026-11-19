@@ -1,0 +1,203 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:key="tg_ws_settings_root">
+
+    <androidx.preference.PreferenceCategory
+        android:title="@string/tg_ws_category_secret">
+
+        <Preference
+            android:key="tg_ws_secret_key"
+            android:icon="@drawable/ic_key"
+            android:title="@string/tg_ws_secret_title"
+            android:summary="@string/tg_ws_secret_summary" />
+
+        <SwitchPreference
+            android:key="tg_ws_verbose"
+            android:icon="@drawable/ic_description"
+            android:title="@string/tg_ws_verbose_title"
+            android:summary="@string/tg_ws_verbose_summary"
+            android:defaultValue="false" />
+
+        <SwitchPreference
+            android:key="tg_ws_proxy_protocol"
+            android:icon="@drawable/ic_network"
+            android:title="@string/tg_ws_proxy_protocol_title"
+            android:summary="@string/tg_ws_proxy_protocol_summary"
+            android:defaultValue="false" />
+
+    </androidx.preference.PreferenceCategory>
+
+    <androidx.preference.PreferenceCategory
+        android:title="@string/tg_ws_category_dc">
+
+        <EditTextPreference
+            android:key="tg_ws_dc1"
+            android:icon="@drawable/ic_computer"
+            android:title="DC1"
+            android:summary="@string/tg_ws_dc_hint"
+            android:defaultValue="149.154.175.50" />
+
+        <EditTextPreference
+            android:key="tg_ws_dc2"
+            android:icon="@drawable/ic_computer"
+            android:title="DC2"
+            android:summary="@string/tg_ws_dc_hint"
+            android:defaultValue="149.154.167.51" />
+
+        <EditTextPreference
+            android:key="tg_ws_dc3"
+            android:icon="@drawable/ic_computer"
+            android:title="DC3"
+            android:summary="@string/tg_ws_dc_hint"
+            android:defaultValue="149.154.175.100" />
+
+        <EditTextPreference
+            android:key="tg_ws_dc4"
+            android:icon="@drawable/ic_computer"
+            android:title="DC4"
+            android:summary="@string/tg_ws_dc_hint"
+            android:defaultValue="149.154.167.91" />
+
+        <EditTextPreference
+            android:key="tg_ws_dc5"
+            android:icon="@drawable/ic_computer"
+            android:title="DC5"
+            android:summary="@string/tg_ws_dc_hint"
+            android:defaultValue="149.154.171.5" />
+
+        <EditTextPreference
+            android:key="tg_ws_dc203"
+            android:icon="@drawable/ic_computer"
+            android:title="DC203"
+            android:summary="@string/tg_ws_dc_hint"
+            android:defaultValue="91.105.192.100" />
+
+        <EditTextPreference
+            android:key="tg_ws_dc1m"
+            android:icon="@drawable/ic_computer"
+            android:title="DC1 Media"
+            android:summary="@string/tg_ws_dc_hint"
+            android:defaultValue="149.154.175.50" />
+
+        <EditTextPreference
+            android:key="tg_ws_dc2m"
+            android:icon="@drawable/ic_computer"
+            android:title="DC2 Media"
+            android:summary="@string/tg_ws_dc_hint"
+            android:defaultValue="149.154.167.51" />
+
+        <EditTextPreference
+            android:key="tg_ws_dc3m"
+            android:icon="@drawable/ic_computer"
+            android:title="DC3 Media"
+            android:summary="@string/tg_ws_dc_hint"
+            android:defaultValue="149.154.175.100" />
+
+        <EditTextPreference
+            android:key="tg_ws_dc4m"
+            android:icon="@drawable/ic_computer"
+            android:title="DC4 Media"
+            android:summary="@string/tg_ws_dc_hint"
+            android:defaultValue="149.154.167.91" />
+
+        <EditTextPreference
+            android:key="tg_ws_dc5m"
+            android:icon="@drawable/ic_computer"
+            android:title="DC5 Media"
+            android:summary="@string/tg_ws_dc_hint"
+            android:defaultValue="149.154.171.5" />
+
+        <EditTextPreference
+            android:key="tg_ws_dc203m"
+            android:icon="@drawable/ic_computer"
+            android:title="DC203 Media"
+            android:summary="@string/tg_ws_dc_hint"
+            android:defaultValue="91.105.192.100" />
+
+    </androidx.preference.PreferenceCategory>
+
+    <androidx.preference.PreferenceCategory
+        android:title="@string/tg_ws_cfproxy_category">
+
+        <SwitchPreference
+            android:key="tg_ws_cf_enabled"
+            android:icon="@drawable/ic_cloud"
+            android:title="@string/tg_ws_cf_enabled_title"
+            android:summary="@string/tg_ws_cf_enabled_summary"
+            android:defaultValue="true" />
+
+        <SwitchPreference
+            android:key="tg_ws_cf_h2"
+            android:icon="@drawable/ic_http"
+            android:title="@string/tg_ws_cfproxy_h2_title"
+            android:summary="@string/tg_ws_cfproxy_h2_summary"
+            android:defaultValue="true" />
+
+        <EditTextPreference
+            android:key="tg_ws_cf_domain"
+            android:icon="@drawable/ic_dns"
+            android:title="@string/tg_ws_cfproxy_user_domain_title"
+            android:summary="@string/tg_ws_cfproxy_user_domain_summary"
+            android:defaultValue="" />
+
+    </androidx.preference.PreferenceCategory>
+
+    <androidx.preference.PreferenceCategory
+        android:title="@string/tg_ws_cfworker_category">
+
+        <EditTextPreference
+            android:key="tg_ws_cf_worker_domains"
+            android:icon="@drawable/ic_cloud"
+            android:title="@string/tg_ws_cfworker_domains_title"
+            android:summary="@string/tg_ws_cfworker_domains_summary"
+            android:defaultValue="" />
+
+    </androidx.preference.PreferenceCategory>
+
+    <androidx.preference.PreferenceCategory
+        android:title="@string/tg_ws_faketls_category">
+
+        <EditTextPreference
+            android:key="tg_ws_faketls_domain"
+            android:icon="@drawable/ic_vpn_key"
+            android:title="@string/tg_ws_faketls_domain_title"
+            android:summary="@string/tg_ws_faketls_domain_summary"
+            android:defaultValue="" />
+
+    </androidx.preference.PreferenceCategory>
+
+    <androidx.preference.PreferenceCategory
+        android:title="@string/tg_ws_logs_category">
+
+        <SwitchPreference
+            android:key="tg_ws_disable_secure"
+            android:icon="@drawable/ic_vpn_key"
+            android:title="@string/tg_ws_disable_secure_title"
+            android:summary="@string/tg_ws_disable_secure_summary"
+            android:defaultValue="true" />
+
+    </androidx.preference.PreferenceCategory>
+
+    <androidx.preference.PreferenceCategory
+        android:title="@string/tg_ws_advanced_category">
+
+        <SwitchPreference
+            android:key="tg_ws_test_dc"
+            android:icon="@drawable/ic_speed"
+            android:title="@string/tg_ws_test_dc_title"
+            android:summary="@string/tg_ws_test_dc_summary"
+            android:defaultValue="false" />
+
+        <ListPreference
+            android:key="tg_ws_buffer_size"
+            android:icon="@drawable/ic_pool"
+            android:title="@string/tg_ws_buffer_size_title"
+            android:summary="@string/tg_ws_buffer_size_summary"
+            android:entries="@array/tg_ws_buffer_sizes"
+            android:entryValues="@array/tg_ws_buffer_size_values"
+            android:defaultValue="256" />
+
+    </androidx.preference.PreferenceCategory>
+
+</PreferenceScreen>

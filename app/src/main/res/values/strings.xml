@@ -288,6 +288,8 @@
     
     <string name="tg_ws_cf_enabled_title">CloudFlare CDN</string>
     <string name="tg_ws_cf_enabled_summary">Маршрутизация через CF WebSocket-домены (стабильнее на некоторых сетях)</string>
+    <string name="tg_ws_disable_secure_title">Выключить TLS для CF-прокси и CF-worker</string>
+    <string name="tg_ws_disable_secure_summary">Включено по умолчанию: соединения к Cloudflare идут на 80-й порт вместо 443 — помогает, когда DPI режет TLS Handshake. Если с ним стало хуже — выключите</string>
     <string name="tg_ws_pool_size_title">WS Pool размер</string>
     <string name="tg_ws_pool_size_summary">Количество заранее подготовленных WebSocket-соединений (больше = быстрее первое подключение)</string>
     <string name="tg_ws_secret_title">Секрет MTProto</string>
@@ -318,4 +320,41 @@
     <string name="notification_disconnect">Отключить</string>
     <string name="port_is_not_available">Порт %1$d занят, попробуйте другой</string>
     <string name="ewenloy_tg_open_proxy_summary_ws">Подключить Telegram к MTProto-прокси (WS, порт 1082)</string>
+
+    <!-- TG WS Proxy полноценный экран настроек -->
+    <string name="tg_ws_settings_title">Настройки TG WS Proxy</string>
+    <string name="tg_ws_settings_summary">Cloudflare, датацентры, секрет, логи</string>
+
+    <string name="tg_ws_category_secret">Секрет и подключение</string>
+    <string name="tg_ws_category_dc">Датацентры Telegram (DC → IP)</string>
+    <string name="tg_ws_dc_hint">По одному правилу на строку, формат: номер:IP</string>
+    <string name="tg_ws_dc_example">Например: 4:149.154.167.220</string>
+
+    <string name="tg_ws_cfproxy_category">Cloudflare Proxy</string>
+    <string name="tg_ws_cfproxy_h2_title">Мультиплексирование медиа (HTTP/2)</string>
+    <string name="tg_ws_cfproxy_h2_summary">Медиа через H2 вместо WebSocket. Требует включённого CF-прокси и TLS</string>
+    <string name="tg_ws_cfproxy_user_domain_title">Свой домен</string>
+    <string name="tg_ws_cfproxy_user_domain_summary">Свой CF-домен вместо публичного списка. DNS A-записи kws{dc} → IP DC</string>
+
+    <string name="tg_ws_cfworker_category">Cloudflare Worker</string>
+    <string name="tg_ws_cfworker_domains_title">Worker домены</string>
+    <string name="tg_ws_cfworker_domains_summary">*.workers.dev домены через запятую — бесплатный обход через Cloudflare</string>
+    <string name="tg_ws_cfworker_user_domain_title">Свой домен</string>
+    <string name="tg_ws_cfworker_user_domain_summary">Дополнительный домен, маршрутизирующий на Worker</string>
+
+    <string name="tg_ws_faketls_category">Fake TLS</string>
+    <string name="tg_ws_faketls_domain_title">Fake TLS домен</string>
+    <string name="tg_ws_faketls_domain_summary">SNI маскировка под реальный сайт. Пусто = выключено (dd-префикс)</string>
+
+    <string name="tg_ws_advanced_category">Дополнительно</string>
+    <string name="tg_ws_test_dc_title">Тестовые DC</string>
+    <string name="tg_ws_test_dc_summary">Весь трафик на тестовые датацентры (для диагностики)</string>
+    <string name="tg_ws_proxy_protocol_title">PROXY protocol v1</string>
+    <string name="tg_ws_proxy_protocol_summary">Принимать PROXY protocol для передачи реального IP клиента</string>
+    <string name="tg_ws_buffer_size_title">Размер буфера (KB)</string>
+    <string name="tg_ws_buffer_size_summary">SO_RCVBUF/SO_SNDBUF TCP-сокета. 256 = по умолчанию</string>
+
+    <string name="tg_ws_logs_category">Логи и производительность</string>
+    <string name="tg_ws_verbose_title">Подробное логирование (verbose)</string>
+    <string name="tg_ws_verbose_summary">Отладочные сообщения в logcat и в файл лога</string>
 </resources>

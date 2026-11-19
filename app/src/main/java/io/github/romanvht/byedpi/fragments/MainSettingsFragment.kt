@@ -97,24 +97,6 @@ class MainSettingsFragment : PreferenceFragmentCompat() {
                 true
             }
 
-        findPreferenceNotNull<SwitchPreference>("tg_ws_cf_enabled")
-            .setOnPreferenceChangeListener { _, _ ->
-                scheduleTgWsRefresh()
-                true
-            }
-
-        findPreferenceNotNull<ListPreference>("tg_ws_pool_size")
-            .setOnPreferenceChangeListener { _, _ ->
-                scheduleTgWsRefresh()
-                true
-            }
-
-        findPreferenceNotNull<Preference>("tg_ws_secret_key")
-            .setOnPreferenceClickListener {
-                showSecretKeyDialog()
-                true
-            }
-
         findPreferenceNotNull<Preference>("battery_optimization")
             .setOnPreferenceClickListener {
                 PermissionUtils.requestBatteryOptimization(requireContext())
@@ -382,31 +364,6 @@ class MainSettingsFragment : PreferenceFragmentCompat() {
             else -> R.string.tg_ws_status_idle
         }
         statusPref.summary = getString(summaryRes)
-    }
-
-    private fun showSecretKeyDialog() {
-        val ctx = requireContext()
-        val prefs = sharedPreferences ?: return
-        val secret = prefs.getString(EwenloyTgWsServiceExtension.PREF_SECRET_KEY, "") ?: ""
-        val displaySecret = if (secret.isEmpty()) getString(R.string.tg_ws_secret_not_generated) else secret
-
-        val tv = TextView(ctx).apply {
-            setPadding(40, 30, 40, 30)
-            textSize = 16f
-            text = displaySecret
-            setTextIsSelectable(true)
-        }
-
-        AlertDialog.Builder(ctx)
-            .setTitle(R.string.tg_ws_secret_dialog_title)
-            .setView(tv)
-            .setPositiveButton(R.string.tg_ws_secret_copy_btn) { _, _ ->
-                val cb = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                cb.setPrimaryClip(android.content.ClipData.newPlainText("MTProto Secret", displaySecret))
-                Toast.makeText(ctx, R.string.tg_ws_secret_copied, Toast.LENGTH_SHORT).show()
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
     }
 
     private fun showDiagnosticsDialog() {
