@@ -54,8 +54,8 @@ android {
         minSdk = 21
         //noinspection OldTargetApi
         targetSdk = 34
-        versionCode = 28
-        versionName = "2.0.8"
+        versionCode = 29
+        versionName = "2.0.9"
 
         // Build stamp: shows up in diagnostics and in the log header.
         buildConfigField("String", "BUILD_STAMP", "\"$buildStamp\"")
@@ -143,6 +143,14 @@ android {
             isUniversalApk = true
         }
     }
+
+    lint {
+        // lintVitalRelease заметно удлиняет assembleRelease (полный анализ R8-выхода).
+        // По умолчанию выключен для быстрой итерации; включается -PrunLint.
+        val runLint = project.hasProperty("runLint")
+        checkReleaseBuilds = runLint
+        abortOnError = runLint
+    }
 }
 
 dependencies {
@@ -178,6 +186,16 @@ tasks.register<Exec>("runNdkBuild") {
         "APP_BUILD_SCRIPT=src/main/jni/Android.mk",
         "NDK_APPLICATION_MK=src/main/jni/Application.mk"
     ))
+
+    // Без объявленных inputs/outputs Exec-задача выполняется ВСЕГДА, и ndk-build
+    // заново пересобирал hev-socks5-tunnel на каждой сборке — это десятки секунд.
+    // Теперь Gradle помечает её UP-TO-DATE, пока native-исходники не менялись.
+    inputs.dir("src/main/jni")
+    inputs.dir("src/main/cpp")
+    outputs.dir("src/main/jniLibs")
+
+    // Аварийный обход для быстрой итерации по Kotlin: ./gradlew assembleDebug -PskipNdk
+    onlyIf { !project.hasProperty("skipNdk") }
 
     println("Command: $commandLine")
 }

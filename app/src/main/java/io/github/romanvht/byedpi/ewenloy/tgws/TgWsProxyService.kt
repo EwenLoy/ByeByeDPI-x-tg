@@ -94,7 +94,16 @@ class TgWsProxyService : Service() {
 
         private const val STATS_UPDATE_MS = 10_000L
         private const val NOTIFICATION_MIN_UPDATE_MS = 10_000L
-        private const val NATIVE_STOP_WAIT_MS = 3_000L
+
+        /**
+         * Пауза после NativeProxy.stopProxy(). Натив останавливается синхронно
+         * и сам ждёт завершения задач, поэтому долгое ожидание здесь только
+         * растягивало выключение: раньше прокси «гас» ощутимо медленно.
+         */
+        private const val NATIVE_STOP_WAIT_MS = 150L
+
+        /** Пауза между остановкой и повторным подъёмом ядра при перезапуске. */
+        private const val RESTART_SETTLE_MS = 250L
 
         private const val MAX_AUTO_RESTARTS = 3
         private const val AUTO_RESTART_DELAY_MS = 2_000L
@@ -149,10 +158,22 @@ class TgWsProxyService : Service() {
                 val proxyProtocol = intent.getBooleanExtra(EXTRA_PROXY_PROTOCOL, false)
                 val verbose = intent.getBooleanExtra(EXTRA_VERBOSE, false)
                 val secretKey = intent.getStringExtra(EXTRA_SECRET_KEY) ?: ""
-                startProxy(bindIp, port, ips, poolSize, bufferSizeKb,
-                    cfEnabled, cfPriority, cfDomain, cfH2,
-                    cfWorkerDomains, fakeTlsDomain, disableSecure,
-                    testDc, proxyProtocol, verbose, secretKey)
+                if (_isRunning.value && !stopInProgress) {
+                    // Прокси уже работает, а пришёл новый конфиг (человек поменял
+                    // настройку). Применяем на месте: без stopSelf и без потери
+                    // 3-секундного ожидания — раньше старт после смены настроек
+                    // ощущался как «не запускается».
+                    LogManager.app("START: применяю новые настройки на работающем ядре")
+                    applyConfigRestart(bindIp, port, ips, poolSize, bufferSizeKb,
+                        cfEnabled, cfPriority, cfDomain, cfH2,
+                        cfWorkerDomains, fakeTlsDomain, disableSecure,
+                        testDc, proxyProtocol, verbose, secretKey)
+                } else {
+                    startProxy(bindIp, port, ips, poolSize, bufferSizeKb,
+                        cfEnabled, cfPriority, cfDomain, cfH2,
+                        cfWorkerDomains, fakeTlsDomain, disableSecure,
+                        testDc, proxyProtocol, verbose, secretKey)
+                }
             }
             ACTION_STOP -> { stopProxy() }
             ACTION_RESTART -> { restartProxy() }
@@ -257,6 +278,9 @@ class TgWsProxyService : Service() {
             }
         }, "ProxyStart").apply { isDaemon = true; start() }
 
+        // Старый сборщик статистики мог остаться от предыдущего запуска:
+        // без отмены после рестарта их два, и уведомление мигает вдвое чаще.
+        statsJob?.cancel()
         statsJob = serviceScope.launch {
             delay(3_000L)
             var consecutiveHealthFailures = 0
@@ -331,6 +355,9 @@ class TgWsProxyService : Service() {
     private fun stopProxy() {
         if (stopInProgress) return
         stopInProgress = true
+        // Гасим состояние сразу, не дожидаясь натива: иначе переключатель
+        // и уведомление висят «включёнными» ещё несколько секунд.
+        updateRunningState(false)
         LogManager.stopListening()
         LogManager.app("stop: пользователь/сервис остановил прокси")
         updateNotification(getString(R.string.notification_stopping), force = true)
@@ -349,25 +376,67 @@ class TgWsProxyService : Service() {
         }
     }
 
-    private fun restartProxy() {
-        if (stopInProgress || lastPort <= 0 || lastSecretKey.isEmpty()) return
-        LogManager.app("restart: перезапуск ядра")
-        stopScope.launch {
+    /**
+     * Применить новые настройки к уже работающему ядру.
+     *
+     * Быстрее полного stop+start: состояние гасим сразу, натив останавливаем
+     * синхронно и поднимаем заново с новым конфигом, не останавливая сервис и
+     * не пересоздавая уведомление с нуля.
+     */
+    private fun applyConfigRestart(
+        bindIp: String, port: Int, ips: String,
+        poolSize: Int, bufferSizeKb: Int,
+        cfEnabled: Boolean, cfPriority: Boolean, cfDomain: String, cfH2Enabled: Boolean,
+        cfWorkerDomains: String, fakeTlsDomain: String, disableSecure: Boolean,
+        testDc: Boolean, proxyProtocol: Boolean, verbose: Boolean,
+        secretKey: String
+    ) {
+        if (restartJob?.isActive == true) return
+        restartJob = serviceScope.launch {
+            statsJob?.cancel(); statsJob = null
+            updateRunningState(false)
             try {
                 NativeProxy.stopProxy()
-                delay(500L)
+            } catch (e: Exception) {
+                Log.w(TAG, "Config restart: stop exception", e)
+            }
+            delay(RESTART_SETTLE_MS)
+            if (!stopInProgress) {
+                startProxy(bindIp, port, ips, poolSize, bufferSizeKb,
+                    cfEnabled, cfPriority, cfDomain, cfH2Enabled,
+                    cfWorkerDomains, fakeTlsDomain, disableSecure,
+                    testDc, proxyProtocol, verbose, secretKey)
+            }
+        }
+    }
+
+    private fun restartProxy() {
+        if (stopInProgress || lastPort <= 0 || lastSecretKey.isEmpty()) return
+        // Один перезапуск за раз: health-check, смена сети и task removed
+        // приходят пачками, и параллельные рестарты рвут уже поднятое ядро.
+        if (restartJob?.isActive == true) return
+
+        restartJob = serviceScope.launch {
+            LogManager.app("restart: перезапуск ядра")
+            statsJob?.cancel(); statsJob = null
+            try {
+                NativeProxy.stopProxy()
             } catch (e: Exception) {
                 Log.w(TAG, "Restart: stopProxy exception", e)
             }
-            serviceScope.launch(Dispatchers.Main) {
-                if (!stopInProgress) {
-                    startProxy(
-                        lastBindIp, lastPort, lastIps, lastPoolSize, lastBufferSizeKb,
-                        lastCfEnabled, lastCfPriority, lastCfDomain, lastCfH2Enabled,
-                        lastCfWorkerDomains, lastFakeTlsDomain, lastDisableSecure,
-                        lastTestDc, lastProxyProtocol, lastVerbose, lastSecretKey
-                    )
-                }
+            // Критично: сбросить флаг «работает» ДО запуска. Иначе startProxy()
+            // выйдет по guard-условию `if (_isRunning.value ...) return`, порт
+            // 1082 останется мёртвым, а health-check будет крутить перезапуски
+            // по кругу. Именно так прокси умирал после смахивания из недавних.
+            updateRunningState(false)
+            delay(RESTART_SETTLE_MS)
+            if (!stopInProgress) {
+                startProxy(
+                    lastBindIp, lastPort, lastIps, lastPoolSize, lastBufferSizeKb,
+                    lastCfEnabled, lastCfPriority, lastCfDomain, lastCfH2Enabled,
+                    lastCfWorkerDomains, lastFakeTlsDomain, lastDisableSecure,
+                    lastTestDc, lastProxyProtocol, lastVerbose, lastSecretKey
+                )
             }
         }
     }

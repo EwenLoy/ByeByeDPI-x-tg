@@ -68,7 +68,7 @@ class TgWsSettingsFragment : PreferenceFragmentCompat() {
         // Небольшая задержка, чтобы prefs успели сохраниться на диск
         Handler(Looper.getMainLooper()).postDelayed({
             tgWsExt.refreshFromPreferences(preferenceManager.sharedPreferences ?: return@postDelayed)
-        }, 300)
+        }, 100)
     }
 
     private fun showSecretDialog() {

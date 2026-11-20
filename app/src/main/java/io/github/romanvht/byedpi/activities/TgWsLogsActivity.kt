@@ -2,10 +2,17 @@ package io.github.romanvht.byedpi.activities
 
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import android.widget.Button
 import android.widget.TextView
+import android.widget.Toast
+import androidx.core.content.FileProvider
 import io.github.romanvht.byedpi.R
 import io.github.romanvht.byedpi.ewenloy.tgws.LogManager
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * Экран логов TG WS прокси.
@@ -21,6 +28,47 @@ class TgWsLogsActivity : BaseActivity() {
     companion object {
         /** Больше в TextView не показываем: файл отдаём целиком только при «Поделиться». */
         private const val MAX_DISPLAY_LINES = 400
+
+        /**
+         * Текст в EXTRA_TEXT ограничиваем: большие строки не проходят через
+         * Binder и «Поделиться» падает молча — ровно то, на что жаловались.
+         * Полный лог всё равно уходит файлом.
+         */
+        private const val MAX_INLINE_CHARS = 80_000
+    }
+
+    /**
+     * «Поделиться»: пишем лог в файл и отдаём его через FileProvider.
+     * Файл не режется лимитом Binder, а после запуска выбора показываем,
+     * куда легли логи — раньше кнопка «молчала».
+     */
+    private fun shareLogs() {
+        try {
+            val text = shareText()
+            val dir = File(cacheDir, "logs").apply { mkdirs() }
+            val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+            val file = File(dir, "bbd_tgws_$stamp.log")
+            file.writeText(text)
+
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_SUBJECT, getString(R.string.tg_ws_logs_title))
+                putExtra(Intent.EXTRA_STREAM, uri)
+                // Запасной вариант для клиентов, которые игнорируют вложение
+                putExtra(Intent.EXTRA_TEXT, text.take(MAX_INLINE_CHARS))
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(send, getString(R.string.tg_ws_logs_share)))
+            Toast.makeText(
+                this,
+                getString(R.string.tg_ws_logs_shared, file.absolutePath),
+                Toast.LENGTH_LONG
+            ).show()
+        } catch (e: Exception) {
+            Log.e("TgWsLogs", "share failed", e)
+            Toast.makeText(this, R.string.tg_ws_logs_share_failed, Toast.LENGTH_LONG).show()
+        }
     }
 
     private val updateRunnable = object : Runnable {
@@ -42,15 +90,7 @@ class TgWsLogsActivity : BaseActivity() {
         }
 
         findViewById<Button>(R.id.btnShareLogs).setOnClickListener {
-            // Раньше кнопка молча ничего не делала на пустом логе — теперь шлём файл,
-            // а если и файла нет, то хотя бы предыдущую сессию или пояснение.
-            val text = shareText()
-            val send = Intent(Intent.ACTION_SEND).apply {
-                type = "text/plain"
-                putExtra(Intent.EXTRA_SUBJECT, getString(R.string.tg_ws_logs_title))
-                putExtra(Intent.EXTRA_TEXT, text)
-            }
-            startActivity(Intent.createChooser(send, getString(R.string.tg_ws_logs_share)))
+            shareLogs()
         }
 
         supportActionBar?.setDisplayHomeAsUpEnabled(true)

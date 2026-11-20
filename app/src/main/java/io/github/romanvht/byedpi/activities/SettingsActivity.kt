@@ -2,12 +2,16 @@ package io.github.romanvht.byedpi.activities
 
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import android.view.Menu
 import android.view.MenuItem
+import android.widget.Toast
 import androidx.activity.result.ActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.StringRes
 import androidx.appcompat.app.AlertDialog
+import androidx.preference.Preference
+import androidx.preference.PreferenceFragmentCompat
 import io.github.romanvht.byedpi.R
 import io.github.romanvht.byedpi.data.AppSettings
 import io.github.romanvht.byedpi.fragments.ByeDpiCMDSettingsFragment
@@ -17,8 +21,41 @@ import io.github.romanvht.byedpi.utility.SettingsUtils
 import io.github.romanvht.byedpi.utility.SettingsUtils.Section
 import java.io.File
 
-class SettingsActivity : BaseActivity() {
+class SettingsActivity : BaseActivity(), PreferenceFragmentCompat.OnPreferenceStartFragmentCallback {
     private var exportSections = Section.entries.toSet()
+
+    /**
+     * Переход по `app:fragment` из XML настроек.
+     *
+     * Без этой реализации нажатие на пункт с привязкой к фрагменту (в том числе
+     * «Настройки TG WS Proxy») не открывало ничего вообще.
+     *
+     * Фрагмент создаём БЕЗ arguments: если передать ключ пункта как rootKey,
+     * PreferenceFragmentCompat ищет PreferenceScreen с таким ключом, не находит
+     * (в XML корень описан через tag или другой ключ) и падает с
+     * IllegalArgumentException — это и был вылет при открытии настроек TG WS.
+     */
+    override fun onPreferenceStartFragment(caller: PreferenceFragmentCompat, pref: Preference): Boolean {
+        val className = pref.fragment ?: return false
+        val fragment = try {
+            supportFragmentManager.fragmentFactory.instantiate(classLoader, className)
+        } catch (e: Exception) {
+            Log.e(TAG, "Не удалось открыть экран настроек $className", e)
+            Toast.makeText(this, R.string.settings_screen_failed, Toast.LENGTH_SHORT).show()
+            return true
+        }
+
+        pref.title?.let { supportActionBar?.title = it }
+        supportFragmentManager.beginTransaction()
+            .replace(R.id.settings, fragment)
+            .addToBackStack(null)
+            .commit()
+        return true
+    }
+
+    private companion object {
+        private const val TAG = "SettingsActivity"
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

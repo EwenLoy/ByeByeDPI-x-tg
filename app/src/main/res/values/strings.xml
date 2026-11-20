@@ -357,4 +357,8 @@
     <string name="tg_ws_logs_category">Логи и производительность</string>
     <string name="tg_ws_verbose_title">Подробное логирование (verbose)</string>
     <string name="tg_ws_verbose_summary">Отладочные сообщения в logcat и в файл лога</string>
+
+    <string name="tg_ws_logs_shared">Логи сохранены: %1$s</string>
+    <string name="tg_ws_logs_share_failed">Не удалось подготовить логи для отправки</string>
+    <string name="settings_screen_failed">Не удалось открыть этот экран настроек</string>
 </resources>

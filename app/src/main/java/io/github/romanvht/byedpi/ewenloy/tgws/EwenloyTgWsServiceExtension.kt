@@ -77,7 +77,11 @@ class EwenloyTgWsServiceExtension {
         this.preferences = preferences
         val nowEnabled = preferences.getBoolean(EWENLOY_TG_WS_MODE_KEY, false)
         if (!nowEnabled) { if (isRunning()) stop(); return }
-        if (!isRunning()) start(preferences) else stop(clearPreference = false).also { start(preferences) }
+        // Не stop()+start(): это гонка. stop() выставляет stopInProgress и держит
+        // его, пока идёт остановка, а пришедший следом ACTION_START молча
+        // отбрасывается — прокси «долго не стартует» или не стартует вовсе.
+        // Сервис сам увидит, что уже работает, и применит настройки на месте.
+        start(preferences)
     }
 
     fun stop(clearPreference: Boolean = true) {
@@ -113,7 +117,17 @@ class EwenloyTgWsServiceExtension {
 
     // ---- helpers ----
 
+    /**
+     * Список DC для ядра. При включённом Cloudflare список НЕ передаём.
+     *
+     * Ядро считает DC «настроенным», если для него есть IP, и тогда ведёт
+     * соединение напрямую в датацентр Telegram, минуя Cloudflare. В сетях, где
+     * прямой доступ к DC режется DPI, это ломает Telegram целиком — ровно то,
+     * ради чего включают Cloudflare. Раньше здесь стоял такой же ранний выход;
+     * при рефакторинге 2.0.8 он потерялся.
+     */
     private fun buildDcIps(prefs: SharedPreferences): String {
+        if (prefs.getBoolean(PREF_CF_ENABLED, true)) return ""
         val isExp = prefs.getBoolean(PREF_EXPERIMENTAL_MODE, false)
         return buildList {
             appendDc(1, prefs.getString(PREF_DC1, "149.154.175.50") ?: "")

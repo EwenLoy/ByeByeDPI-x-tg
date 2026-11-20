@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Логи TG WS: отдаём файл из кэша, чтобы «Поделиться» не упиралось
+         в лимит Binder при передаче большого текста через EXTRA_TEXT. -->
+    <cache-path
+        name="tgws_logs"
+        path="logs/" />
+</paths>
