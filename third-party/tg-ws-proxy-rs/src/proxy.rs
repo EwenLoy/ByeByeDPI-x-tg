@@ -11,10 +11,12 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 // ---------------------------------------------------------------------------
 // Fronting flag — proxy/pool.py::_WsPool.try_fronting_first (начинается true)
@@ -28,6 +30,69 @@ pub fn ws_pool_fronting_first() -> bool {
 
 pub fn set_ws_pool_fronting_first(v: bool) {
     TRY_FRONTING_FIRST.store(v, Ordering::Relaxed);
+}
+
+// --------------------------------------------------------------------------
+// Вспомогательные флаги/состояния портов Python v1.12.0
+// --------------------------------------------------------------------------
+
+// pool.py::_CfWorkerPool.try_secure_first: начинаем с TLS(443), после первого
+// успеха — с последнего сработавшего режима. disable_secure => только plain.
+static CF_WORKER_TRY_SECURE_FIRST: AtomicBool = AtomicBool::new(true);
+
+pub fn cf_worker_try_secure_first() -> bool {
+    CF_WORKER_TRY_SECURE_FIRST.load(Ordering::Relaxed)
+}
+
+pub fn set_cf_worker_try_secure_first(v: bool) {
+    CF_WORKER_TRY_SECURE_FIRST.store(v, Ordering::Relaxed);
+}
+
+// bridge.py: экспоненциальный бэкофф прямого TCP fallback (30s -> x2^n -> 3600s).
+type TcpFbKey = (String, u16);
+
+static TCP_FALLBACK_FAILURES: once_cell::sync::Lazy<parking_lot::RwLock<HashMap<TcpFbKey, u32>>> =
+    once_cell::sync::Lazy::new(|| parking_lot::RwLock::new(HashMap::new()));
+
+static TCP_FALLBACK_RETRY_AFTER: once_cell::sync::Lazy<parking_lot::RwLock<HashMap<TcpFbKey, f64>>> =
+    once_cell::sync::Lazy::new(|| parking_lot::RwLock::new(HashMap::new()));
+
+static TCP_FALLBACK_CONNECTING: once_cell::sync::Lazy<parking_lot::Mutex<HashSet<TcpFbKey>>> =
+    once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(HashSet::new()));
+
+pub fn reset_tcp_backoff() {
+    TCP_FALLBACK_FAILURES.write().clear();
+    TCP_FALLBACK_RETRY_AFTER.write().clear();
+    TCP_FALLBACK_CONNECTING.lock().clear();
+}
+
+/// Учесть провал TCP fallback: failures++, пауза по лестнице, вернуть delay.
+fn tcp_fallback_fail(key: &TcpFbKey) -> f64 {
+    let failures = {
+        let mut m = TCP_FALLBACK_FAILURES.write();
+        let f = m.entry(key.clone()).or_insert(0);
+        *f += 1;
+        *f
+    };
+    // Python: min(TCP_BACKOFF_INITIAL * 2 ** min(failures - 1, 7), MAX)
+    let delay = (TCP_FALLBACK_BACKOFF_INITIAL * 2f64.powi((failures - 1).min(7) as i32))
+        .min(TCP_FALLBACK_BACKOFF_MAX);
+    TCP_FALLBACK_RETRY_AFTER
+        .write()
+        .insert(key.clone(), now_monotonic() + delay);
+    delay
+}
+
+/// Python: isinstance(exc, (asyncio.TimeoutError, TimeoutError)).
+fn is_timeout_like(e: &WsError) -> bool {
+    match e {
+        WsError::Timeout => true,
+        WsError::Io(io) => {
+            io.kind() == std::io::ErrorKind::TimedOut
+                || io.kind() == std::io::ErrorKind::WouldBlock
+        }
+        _ => false,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -104,6 +169,70 @@ pub fn is_media_int(b: bool) -> i32 {
         1
     } else {
         0
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PeekableReader — порт event_loop.client_setup (Python v1.12.0).
+// Пока идёт дозвон до CF/TCP, следим, не ушёл ли клиент, НЕ теряя его байты:
+// «подглядывающий» reader складывает прочитанное в префикс и отдаёт дальше в
+// bridge в исходном порядке.
+// ---------------------------------------------------------------------------
+
+pub struct PeekableReader<R> {
+    inner: R,
+    prefix: VecDeque<u8>,
+}
+
+impl<R> PeekableReader<R> {
+    pub fn new(inner: R) -> Self {
+        PeekableReader {
+            inner,
+            prefix: VecDeque::new(),
+        }
+    }
+}
+
+impl<R: AsyncReadExt + Unpin> PeekableReader<R> {
+    /// Прочитать ровно 1 байт в префикс. Ok(true) — байт получен (клиент жив),
+    /// Ok(false) — EOF, Err — ошибка транспорта.
+    async fn fill_one(&mut self) -> std::io::Result<bool> {
+        let mut b = [0u8; 1];
+        let n = self.inner.read(&mut b).await?;
+        if n == 0 {
+            return Ok(false);
+        }
+        self.prefix.push_back(b[0]);
+        Ok(true)
+    }
+}
+
+impl<R: AsyncReadExt + Unpin> AsyncRead for PeekableReader<R> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        if !this.prefix.is_empty() {
+            let n = this.prefix.len().min(buf.remaining());
+            let bytes: Vec<u8> = this.prefix.drain(..n).collect();
+            buf.put_slice(&bytes);
+            return Poll::Ready(Ok(()));
+        }
+        Pin::new(&mut this.inner).poll_read(cx, buf)
+    }
+}
+
+/// Ждём, пока клиент закроет соединение во время дозвона. Если клиент прислал
+/// данные — он жив, и проба больше не читает (данные уйдут в bridge из префикса).
+/// Завершение future = клиент ушёл, дозвон надо отменить.
+async fn client_gone_probe<R>(reader: &mut PeekableReader<R>)
+where
+    R: AsyncReadExt + Unpin,
+{
+    if let Ok(true) = reader.fill_one().await {
+        std::future::pending::<()>().await
     }
 }
 
@@ -624,7 +753,7 @@ impl CfWorkerPool {
                 }
             }
             if let Some((ws, domain)) = pool
-                .connect_one(worker_domains.clone(), fallback_dst.clone(), dc)
+                .connect_one(worker_domains.clone(), fallback_dst.clone(), dc, 8.0)
                 .await
             {
                 let mut map = pool.idle.lock().await;
@@ -641,22 +770,50 @@ impl CfWorkerPool {
         });
     }
 
+    /// Порт proxy/pool.py::connect_one (Python v1.12.0).
+    /// disable_secure => только plain(80). Иначе два режима: начинаем с
+    /// последнего успешного (try_secure_first); Timeout в первом режиме даёт
+    /// попытку во втором, прочие ошибки помечают домен и режут перебор.
     async fn connect_one(
         &self,
         worker_domains: Vec<String>,
         fallback_dst: String,
         dc: i32,
+        timeout_secs: f64,
     ) -> Option<(RawWebSocket, String)> {
-        let secure = !DISABLE_SECURE.load(Ordering::Relaxed);
         let query = format!("dst={}&dc={}", fallback_dst, dc);
         let path = format!("/apiws?{}", query);
+        let disable_secure = DISABLE_SECURE.load(Ordering::Relaxed);
+        let modes: Vec<bool> = if disable_secure {
+            vec![false]
+        } else {
+            let first = cf_worker_try_secure_first();
+            vec![first, !first]
+        };
         for worker_domain in self.available_domains(worker_domains).await {
-            match ws_connect_full_opts(&worker_domain, &worker_domain, &path, 8.0, None, Some(secure))
+            for (attempt, secure) in modes.iter().enumerate() {
+                match ws_connect_full_opts(
+                    &worker_domain,
+                    &worker_domain,
+                    &path,
+                    timeout_secs,
+                    None,
+                    Some(*secure),
+                )
                 .await
-            {
-                Ok(ws) => return Some((ws, worker_domain)),
-                Err(exc) => {
-                    self.report_failure(&worker_domain, &exc).await;
+                {
+                    Ok(ws) => {
+                        set_cf_worker_try_secure_first(*secure);
+                        return Some((ws, worker_domain));
+                    }
+                    Err(exc) => {
+                        // Timeout в первом режиме -> пробуем второй.
+                        if attempt + 1 < modes.len() && is_timeout_like(&exc) {
+                            continue;
+                        }
+                        self.report_failure(&worker_domain, &exc).await;
+                        break;
+                    }
                 }
             }
         }
@@ -690,9 +847,57 @@ impl CfWorkerPool {
         domains
     }
 
-    pub async fn report_failure(&self, _worker_domain: &str, _exc: &WsError) {
-        // TODO: picks up 429/daily-limit handling — как в оригинале пока no-op.
-        return;
+    /// Порт pool.py::report_failure (Python v1.12.0, cooldown rate-limited
+    /// worker-доменов): 429 -> до конца суток (UTC), 5xx / сетевые ошибки /
+    /// Timeout -> FAILURE_COOLDOWN (60c), 4xx (кроме 429) -> домен жив.
+    pub async fn report_failure(&self, worker_domain: &str, exc: &WsError) {
+        let now_now = now_monotonic();
+        {
+            let map = self.exhausted_until.lock().await;
+            if let Some(until) = map.get(worker_domain) {
+                if *until > now_now {
+                    return;
+                }
+            }
+        }
+
+        let (exhausted_until, reason): (f64, String) = if let Some(h) = exc.handshake() {
+            if h.status_code == 429 {
+                // Workers free plan reports the daily request limit as 429.
+                (
+                    now_now + seconds_until_utc_midnight(),
+                    "daily request limit".to_string(),
+                )
+            } else if h.status_code >= 500 {
+                (
+                    now_now + CF_WORKER_FAILURE_COOLDOWN,
+                    format!("HTTP {}", h.status_code),
+                )
+            } else {
+                // A challenge or a misconfigured route is not a reason to
+                // disable the whole domain.
+                return;
+            }
+        } else if matches!(exc, WsError::Io(_)) || matches!(exc, WsError::Timeout) {
+            (
+                now_now + CF_WORKER_FAILURE_COOLDOWN,
+                format!("{}", exc.compact()),
+            )
+        } else {
+            // Прочие ошибки домен не отключают.
+            return;
+        };
+
+        self.exhausted_until
+            .lock()
+            .await
+            .insert(worker_domain.to_string(), exhausted_until);
+        lwarn!(
+            "CF worker {} disabled for {} seconds: {}",
+            worker_domain,
+            ((exhausted_until - now_now) as i64).max(1),
+            reason
+        );
     }
 
     pub async fn warmup(self: &Arc<Self>, dc_opt_map: &HashMap<i32, String>) {
@@ -732,6 +937,8 @@ impl CfWorkerPool {
         self.idle.lock().await.clear();
         self.refilling.lock().await.clear();
         self.exhausted_until.lock().await.clear();
+        // Python: reset() возвращает try_secure_first = True.
+        set_cf_worker_try_secure_first(true);
     }
 }
 
@@ -1148,7 +1355,7 @@ pub async fn bridge_tcp_stream(
 // ---------------------------------------------------------------------------
 
 pub async fn tcp_fallback<R, W>(
-    conn_read: R,
+    mut conn_read: PeekableReader<R>,
     conn_write: W,
     dst: &str,
     port: u16,
@@ -1162,22 +1369,97 @@ where
     W: AsyncWriteExt + Unpin + Send + 'static,
 {
     let addr = format!("{}:{}", dst, port);
-    let mut remote =
-        match tokio::time::timeout(Duration::from_secs(10), TcpStream::connect(&addr)).await {
-            Ok(Ok(r)) => r,
-            Ok(Err(e)) => {
-                lwarn!("[{}] TCP fallback to {}:{} failed: {}", label, dst, port, e);
+    let key: TcpFbKey = (dst.to_string(), port);
+
+    // Python v1.12.0: пропускаем connect, если цель уже дозванивается другими
+    // клиентами или стоит на бэкоффе после прошлых провалов.
+    {
+        let connecting = TCP_FALLBACK_CONNECTING.lock();
+        if connecting.contains(&key) {
+            ldebug!(
+                "[{}] TCP fallback to {}:{} skipped (already connecting)",
+                label, dst, port
+            );
+            return false;
+        }
+        let now = now_monotonic();
+        let after = TCP_FALLBACK_RETRY_AFTER.read();
+        if let Some(t) = after.get(&key) {
+            if now < *t {
+                ldebug!(
+                    "[{}] TCP fallback to {}:{} skipped (backoff {:.0}s)",
+                    label,
+                    dst,
+                    port,
+                    t - now
+                );
                 return false;
             }
-            Err(_) => {
-                lwarn!("[{}] TCP fallback to {}:{} failed: timeout", label, dst, port);
+        }
+    }
+
+    TCP_FALLBACK_CONNECTING.lock().insert(key.clone());
+
+    linfo!("[{}] TCP fallback to {}:{}", label, dst, port);
+    let dial = tokio::time::timeout(Duration::from_secs(10), TcpStream::connect(&addr));
+    tokio::pin!(dial);
+    let connect_res = {
+        let mut probe = client_gone_probe(&mut conn_read);
+        tokio::pin!(probe);
+        tokio::select! {
+            // Стоп-прокси отменяет соединение (аналог cancel в event loop).
+            _ = cancel_token.cancelled() => None,
+            // Клиент ушёл, пока мы дозванивались (Python client_setup).
+            _ = &mut probe => {
+                ldebug!("[{}] TCP fallback to {}:{} canceled: client left", label, dst, port);
+                TCP_FALLBACK_CONNECTING.lock().remove(&key);
                 return false;
             }
-        };
+            r = &mut dial => Some(r),
+        }
+    };
+
+    // Python: стем «connecting» снимается сразу после попытки connect.
+    TCP_FALLBACK_CONNECTING.lock().remove(&key);
+
+    let connect_res = match connect_res {
+        Some(r) => r,
+        None => {
+            ldebug!("[{}] TCP fallback to {}:{} canceled", label, dst, port);
+            return false;
+        }
+    };
+
+    let mut remote = match connect_res {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => {
+            let delay = tcp_fallback_fail(&key);
+            lwarn!(
+                "[{}] TCP fallback to {}:{} failed: {}; retry in {:.0}s",
+                label, dst, port, e, delay
+            );
+            return false;
+        }
+        Err(_) => {
+            let delay = tcp_fallback_fail(&key);
+            lwarn!(
+                "[{}] TCP fallback to {}:{} failed: timeout; retry in {:.0}s",
+                label, dst, port, delay
+            );
+            return false;
+        }
+    };
+
+    // Успешный connect: Python очищает failures/retry_after цели.
+    TCP_FALLBACK_FAILURES.write().remove(&key);
+    TCP_FALLBACK_RETRY_AFTER.write().remove(&key);
+
     let _ = remote.set_nodelay(true);
 
     STATS.connections_tcp_fallback.fetch_add(1, Ordering::Relaxed);
     if remote.write_all(init).await.is_err() {
+        // В оригинале relay_init пишется внутри try: неудача тоже в бэкофф.
+        let _ = tcp_fallback_fail(&key);
         return false;
     }
     let (clt_dec, clt_enc, tg_enc, tg_dec) = ctx_streams;
@@ -1196,76 +1478,18 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// Cfproxy fallback — мобильная версия (параллель + 429 cooldown + DoH),
-// путь и secure как в оригинале.
+// Cfproxy fallback — лестница таймаутов + cooldown + TLS↔HTTP чередование.
+// Порт proxy/cf_websocket.py (Python v1.12.0): последовательный перебор
+// доменов через connect_cf_domains, cooldown 30s на (base, режим) после
+// TimeoutError, fmt попыток 3/3/5/5/10, статистика рабочего режима.
 // ---------------------------------------------------------------------------
 
-async fn try_cfproxy_base_domain(
-    dc: i32,
-    base_domain: &str,
-    ws_path: &str,
-) -> (Option<RawWebSocket>, String) {
-    let base_domain = normalize_cf_domain(base_domain);
-    if base_domain.is_empty() {
-        return (None, String::new());
-    }
-    let remaining = cfproxy_429_cooldown_remaining(&base_domain);
-    if remaining > Duration::ZERO {
-        ldebug!(
-            " CF skip {}: 429 cooldown {:.0}s",
-            base_domain,
-            remaining.as_secs_f64().ceil()
-        );
-        return (None, String::new());
-    }
-    let _permit = match acquire_cfproxy_attempt_slot().await {
-        Some(p) => p,
-        None => return (None, String::new()),
-    };
-
-    let domain = format!("kws{}.{}", dc, base_domain);
-    ldebug!(" CF try {}", domain);
-
-    // SNI = базовый домен, Host = kwsN.<домен>: DPI режет ClientHello с kwsN.*.
-    let (ws, resolved_ip, err) = cf_connect_domain(
-        &domain,
-        ws_path,
-        5.0,
-        Some(base_domain.as_str()),
-    )
-    .await;
-    if let Some(e) = err {
-        // Cooldown ставим ТОЛЬКО при HTTP 429, иначе любой reset/timeout
-        // выжигал бы домены и плодил лавину cooldown.
-        if is_http_status_error(&e, 429) {
-            mark_cfproxy_429_cooldown(&base_domain, &e);
-        }
-        if !resolved_ip.is_empty() {
-            log_cf_conn_error(
-                &format!(" CF fail {} via {}: {}", domain, resolved_ip, e.compact()),
-                &e,
-            );
-        } else {
-            log_cf_conn_error(&format!(" CF fail {}: {}", domain, e.compact()), &e);
-        }
-        return (None, String::new());
-    }
-
-    clear_cfproxy_429_cooldown(&base_domain);
-    if !resolved_ip.is_empty() {
-        ldebug!(" CF ok {} via {}", domain, resolved_ip);
-    } else {
-        ldebug!(" CF ok {} via hostname", domain);
-    }
-    (ws, base_domain)
-}
-
-// Только устанавливает WS-соединение через CF, НЕ трогая conn.
 async fn cfproxy_acquire_ws(
     dc: i32,
     is_media: bool,
     ws_path: &str,
-    cancel_token: &CancellationToken,
+    label: &str,
+    dial_token: &CancellationToken,
 ) -> Option<(RawWebSocket, String)> {
     let (enabled, domains) = {
         let cfg = CFPROXY.read();
@@ -1286,61 +1510,81 @@ async fn cfproxy_acquire_ws(
     let m_tag = if is_media { " media" } else { "" };
     ldebug!(" CF fallback DC{}{}: {} домен(ов)", dc, m_tag, ordered.len());
 
-    let mut ws: Option<RawWebSocket> = None;
-    let mut chosen_domain = String::new();
+    let secure = !DISABLE_SECURE.load(Ordering::Relaxed);
+    let candidates: Vec<(String, String)> = ordered
+        .into_iter()
+        .map(|b| {
+            let host = format!("kws{}.{}", dc, b);
+            (b, host)
+        })
+        .collect();
 
-    if !ordered.is_empty() && !ordered[0].is_empty() {
-        let (w, d) = try_cfproxy_base_domain(dc, &ordered[0], ws_path).await;
-        ws = w;
-        chosen_domain = d;
-    }
-
-    if ws.is_none() && ordered.len() > 1 {
-        let remaining_domains: Vec<String> = ordered[1..].to_vec();
-        let sem = Arc::new(tokio::sync::Semaphore::new(CFPROXY_FALLBACK_PARALLEL));
-        let mut handles = Vec::new();
-        for bd in remaining_domains {
-            let sem = sem.clone();
-            let cancel = cancel_token.clone();
-            let ws_path = ws_path.to_string();
-            handles.push(tokio::spawn(async move {
-                tokio::select! {
-                    _ = cancel.cancelled() => None,
-                    r = async {
-                        let _p = sem.acquire().await.ok()?;
-                        let (w, d) = try_cfproxy_base_domain(dc, &bd, &ws_path).await;
-                        w.map(|ws| (ws, d))
-                    } => r,
-                }
-            }));
-        }
-        for h in handles {
-            if let Ok(Some((w, d))) = h.await {
-                if ws.is_none() {
-                    ws = Some(w);
-                    chosen_domain = d;
-                } else {
-                    tokio::spawn(async move {
-                        w.close().await;
-                    });
-                }
-            }
-        }
-    }
-
-    match ws {
-        Some(w) => {
+    // Порт оригинальной SEO-фичи мода: SNI=base, Host=kwsN — внутри
+    // cf_connect_domain (ws_connect_once_full с tls_name), Cloudflare
+    // маршрутизирует по Host. DPI режет ClientHello с kwsN.*.
+    match connect_cf_domains(candidates, label, secure, ws_path, dial_token).await {
+        Some((ws, chosen_domain)) => {
             if !chosen_domain.is_empty() {
-                if crate::balancer::BALANCER.write().update_domain_for_dc(dc, &chosen_domain) {
+                if crate::balancer::BALANCER
+                    .write()
+                    .update_domain_for_dc(dc, &chosen_domain)
+                {
                     linfo!(" CF домен для DC{} -> {}", dc, chosen_domain);
                 }
             }
-            Some((w, chosen_domain))
+            Some((ws, chosen_domain))
         }
         None => {
             lwarn!(" CF fallback DC{}{}: все CF домены недоступны", dc, m_tag);
             None
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Оценка исхода CF-сессии.
+// ---------------------------------------------------------------------------
+
+/// Cloudflare принял WS и закрыл его через доли секунды — это не успех, а
+/// провал: домен надо считать битым и уводить DC на другой.
+///
+/// Без этого обратной связи нет вообще: `report_failure` есть только у пула
+/// CF Worker, 429-кулдаун ставится только по HTTP-статусу, а короткая сессия
+/// через CF раньше просто логировалась как `WS session closed (upstream:
+/// ws_close)` и ничего не меняла. В итоге закреплённый за DC домен оставался
+/// тем же, и очередной перезаход клиента (10-20 соединений сразу) снова бился
+/// в тот же край, а Telegram уходил в экспоненциальный бэкофф — те самые
+/// 1-3 минуты «Подключение к прокси», которые лечились перезапуском ядра.
+fn report_cf_session_outcome(dc: i32, domain: &str, lived_secs: f64, bytes_moved: i64) {
+    const SHORT_SESSION_SECS: f64 = 1.5;
+    const MIN_BYTES_FOR_OK: i64 = 1024;
+    if domain.is_empty() || lived_secs > SHORT_SESSION_SECS || bytes_moved >= MIN_BYTES_FOR_OK {
+        return;
+    }
+    let mut balancer = crate::balancer::BALANCER.write();
+    balancer.mark_domain_degraded(domain);
+    let alt = balancer
+        .get_domains_for_dc(dc)
+        .into_iter()
+        .find(|d| d.as_str() != domain);
+    if let Some(next) = alt {
+        if balancer.update_domain_for_dc(dc, &next) {
+            lwarn!(
+                " CF домен {} закрыл сессию через {:.1}с ({} B) -> DC{} уходит на {} на 30с",
+                domain,
+                lived_secs,
+                bytes_moved,
+                dc,
+                next
+            );
+        }
+    } else {
+        lwarn!(
+            " CF домен {} закрыл сессию через {:.1}с ({} B), замены нет",
+            domain,
+            lived_secs,
+            bytes_moved
+        );
     }
 }
 
@@ -1379,6 +1623,10 @@ where
     let secure_port = if DISABLE_SECURE.load(Ordering::Relaxed) { 80 } else { 443 };
     let use_worker = !worker_domains.is_empty() && !fallback_dst.is_empty() && !is_test;
 
+    // Python v1.12.0 client_setup: пока идёт дозвон, следим за клиентом,
+    // не теряя его байты (см. PeekableReader).
+    let mut conn_read = PeekableReader::new(conn_read);
+
     // Шаг 1: worker-ws (без halves) — порт _cfproxy_worker_fallback.
     if use_worker {
         let pooled = pools
@@ -1392,43 +1640,34 @@ where
             );
             Some(ws)
         } else {
-            let secure = !DISABLE_SECURE.load(Ordering::Relaxed);
-            let query = format!("dst={}&dc={}", fallback_dst, dc);
-            let path = format!("/apiws?{}", query);
-            let mut found = None;
-            for worker_domain in pools.cf_worker.available_domains(worker_domains.clone()).await {
-                linfo!(
-                    "[{}] DC{}{} -> trying CF worker {} for {}",
-                    label, dc, m_tag, worker_domain, fallback_dst
-                );
-                match ws_connect_full_opts(
-                    &worker_domain,
-                    &worker_domain,
-                    &path,
-                    10.0,
-                    None,
-                    Some(secure),
-                )
-                .await
-                {
-                    Ok(ws) => {
-                        found = Some(ws);
-                        break;
-                    }
-                    Err(exc) => {
-                        pools.cf_worker.report_failure(&worker_domain, &exc).await;
-                        lwarn!(
-                            "[{}] DC{}{} CF worker {} failed: {}",
-                            label, dc, m_tag, worker_domain, exc.compact()
-                        );
-                    }
+            // Python v1.12.0: connect через cf_worker.connect_one (режимы
+            // TLS/plain, cooldown), клиентский cancel учитывается внутри.
+            let dial_token = CancellationToken::new();
+            tokio::spawn({
+                let token = dial_token.clone();
+                let root = cancel_token.clone();
+                async move {
+                    root.cancelled().await;
+                    token.cancel();
                 }
+            });
+            let connected = pools
+                .cf_worker
+                .connect_one(worker_domains.clone(), fallback_dst.clone(), dc, 10.0)
+                .await;
+            if connected.is_none() {
+                return false;
             }
-            found
+            let (ws, worker_domain) = connected.unwrap();
+            linfo!(
+                "[{}] DC{}{} -> CF worker {} for {}",
+                label, dc, m_tag, worker_domain, fallback_dst
+            );
+            Some(ws)
         };
         if let Some(ws) = worker_ws {
             STATS.connections_cfproxy.fetch_add(1, Ordering::Relaxed);
-            if ws.send(relay_init).await.is_ok() {
+            if ws.send_init(relay_init).await.is_ok() {
                 bridge_ws(
                     conn_read,
                     conn_write,
@@ -1453,13 +1692,29 @@ where
 
     // Шаг 2: cf-ws (без halves).
     if use_cf {
-        if let Some((ws, _chosen_domain)) =
-            cfproxy_acquire_ws(dc, is_media, ws_path, &cancel_token).await
+        let acquired = {
+            let dial = cfproxy_acquire_ws(dc, is_media, ws_path, &label, &cancel_token);
+            tokio::pin!(dial);
+            let mut probe = client_gone_probe(&mut conn_read);
+            tokio::pin!(probe);
+            tokio::select! {
+                _ = cancel_token.cancelled() => None,
+                _ = &mut probe => {
+                    ldebug!("[{}] CF dial canceled: client left", label);
+                    None
+                }
+                r = &mut dial => r,
+            }
+        };
+        if let Some((ws, chosen_domain)) = acquired
         {
             STATS.connections_cfproxy.fetch_add(1, Ordering::Relaxed);
             linfo!(" DC{}{} подключен через CF", dc, m_tag);
 
-            if ws.send(relay_init).await.is_ok() {
+            if ws.send_init(relay_init).await.is_ok() {
+                let session_started = now_monotonic();
+                let bytes_before =
+                    STATS.bytes_up.load(Ordering::Relaxed) + STATS.bytes_down.load(Ordering::Relaxed);
                 bridge_ws(
                     conn_read,
                     conn_write,
@@ -1475,9 +1730,21 @@ where
                     cancel_token,
                 )
                 .await;
+                // Сессия, прожившая доли секунды, — это фейл домена, а не успех:
+                // иначе DC продолжает ходить в тот же край Cloudflare.
+                let bytes_moved = STATS.bytes_up.load(Ordering::Relaxed)
+                    + STATS.bytes_down.load(Ordering::Relaxed)
+                    - bytes_before;
+                report_cf_session_outcome(
+                    dc,
+                    &chosen_domain,
+                    now_monotonic() - session_started,
+                    bytes_moved,
+                );
                 return true;
             }
             ws.close().await;
+            report_cf_session_outcome(dc, &chosen_domain, 0.0, 0);
             // CF умер сразу после хендшейка — пробуем TCP на том же conn.
         }
         // CF не дал ws — halves НЕ тронуты, идём в TCP fallback ниже.

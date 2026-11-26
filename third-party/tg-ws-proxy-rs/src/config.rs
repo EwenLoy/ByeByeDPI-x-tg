@@ -45,6 +45,19 @@ pub const BRIDGE_READ_TIMEOUT: Duration = Duration::from_secs(120);
 pub const BRIDGE_PING_INTERVAL: Duration = Duration::from_secs(30);
 pub const WS_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 pub const WS_CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
+// Python v1.12.0: RawWebSocket.CLOSE_TIMEOUT — предел на фазы close().
+pub const WS_CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
+// Python v1.12.0 cf_websocket.py: cooldown после таймаута CF-диала и лестница
+// таймаутов попыток (3/3/5/5/10 с).
+pub const CF_TIMEOUT_COOLDOWN: f64 = 30.0;
+pub const CF_CONNECT_TIMEOUTS: [f64; 5] = [3.0, 3.0, 5.0, 5.0, 10.0];
+// Python v1.12.0 bridge.py TCP_BACKOFF_INITIAL/MAX: экспоненциальный бэкофф
+// прямого TCP fallback.
+pub const TCP_FALLBACK_BACKOFF_INITIAL: f64 = 30.0;
+pub const TCP_FALLBACK_BACKOFF_MAX: f64 = 3600.0;
+// Python v1.12.0 pool.py::_CfWorkerPool.FAILURE_COOLDOWN — пауза воркер-домена
+// после 5xx/сетевой ошибки.
+pub const CF_WORKER_FAILURE_COOLDOWN: f64 = 60.0;
 pub const WS_BRIDGE_CHUNK_SIZE: usize = 64 * 1024;
 pub const POOLED_FRAME_CAP: usize = WS_BRIDGE_CHUNK_SIZE + 32;
 
@@ -74,6 +87,12 @@ pub const CFPROXY_DIAL_PHASE_TIMEOUT: Duration = Duration::from_secs(4);
 pub const CFPROXY_FALLBACK_PARALLEL: usize = 2;
 pub const CFPROXY_429_COOLDOWN: Duration = Duration::from_secs(45);
 pub const CFPROXY_429_MAX_COOLDOWN: Duration = Duration::from_secs(300);
+/// Потолок роста кулдауна при повторных 429. Лестница 45 -> 90 -> 180 -> 300
+/// растягивала восстановление до 5 минут, а домен общий для всех DC, так что
+/// после одного шторма прокси мог «молчать» всё это время — снаружи это ровно
+/// те 1-3 минуты «Подключение к прокси». Retry-After от сервера по-прежнему
+/// уважается вплоть до CFPROXY_429_MAX_COOLDOWN.
+pub const CFPROXY_429_MAX_LADDER: Duration = Duration::from_secs(90);
 pub const CFPROXY_GLOBAL_PARALLEL: usize = 4;
 
 pub static RECV_BUF: AtomicI32 = AtomicI32::new(DEFAULT_RECV_BUF as i32);
@@ -643,4 +662,12 @@ pub fn now_monotonic() -> f64 {
     use std::time::Instant;
     static START: Lazy<Instant> = Lazy::new(Instant::now);
     START.elapsed().as_secs_f64()
+}
+
+/// Секунды до ближайшей UTC-полуночи (Python: 86400 - (time.time() % 86400)).
+/// Используется cooldown'ом CF Worker-домена после HTTP 429 (лимит free-плана
+/// сбрасывается в полночь UTC).
+pub fn seconds_until_utc_midnight() -> f64 {
+    let secs = now_unix() % 86400;
+    (86400 - secs) as f64
 }

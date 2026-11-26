@@ -213,6 +213,24 @@ impl RawWebSocket {
         self.write_frame(&frame, WS_WRITE_TIMEOUT).await
     }
 
+    /// Python v1.12.0 RawWebSocket.send_init: отправка relay_init с 10-секундным
+    /// пределом. Любая ошибка или таймаут помечает WS закрытым (аналог
+    /// transport.abort() в оригинале — дроп носителя выходит из всех мест).
+    pub async fn send_init(&self, data: &[u8]) -> Result<(), WsError> {
+        let res = tokio::time::timeout(std::time::Duration::from_secs(10), self.send(data)).await;
+        match res {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => {
+                self.closed.store(true, Ordering::Relaxed);
+                Err(e)
+            }
+            Err(_) => {
+                self.closed.store(true, Ordering::Relaxed);
+                Err(WsError::Timeout)
+            }
+        }
+    }
+
     pub async fn send_batch(&self, parts: &[Vec<u8>]) -> Result<(), WsError> {
         if self.is_closed() {
             return Err(WsError::Other("WebSocket closed".to_string()));
@@ -331,10 +349,21 @@ impl RawWebSocket {
             return;
         }
         // Best-effort close frame + shutdown транспорта.
+        // Python v1.12.0: обе фазы close() ограничены CLOSE_TIMEOUT=2s, по
+        // таймауту — transport.abort(). В tokio эквивалент abort — прекращаем
+        // ожидание и дропаем future: носитель закроется при drop'е ws,
+        // а вызывающий код никогда не висит дольше 2s на полу-закрытом пёре.
         let frame = build_frame(OP_CLOSE, &[], true);
         let _ = self.write_frame(&frame, WS_CONTROL_TIMEOUT).await;
         let mut writer = self.writer.lock().await;
-        let _ = shutdown_match(&mut writer).await;
+        let shutdown = shutdown_match(&mut writer);
+        tokio::pin!(shutdown);
+        match tokio::time::timeout(WS_CLOSE_TIMEOUT, shutdown).await {
+            Ok(_) => {}
+            Err(_) => {
+                ldebug!("ws close timeout ({} s) -> abort", WS_CLOSE_TIMEOUT.as_secs());
+            }
+        }
     }
 
     // recv с дедлайном чтения (для bridge).
@@ -773,6 +802,18 @@ pub async fn ws_connect_once(
     timeout: Duration,
 ) -> Result<RawWebSocket, WsError> {
     let secure = !DISABLE_SECURE.load(Ordering::Relaxed);
+    ws_connect_once_full(dial_addr, domain, path, timeout, None, secure).await
+}
+
+// Явно заданный режим (Python v1.12.0: connect(..., secure=...) из
+// cf_websocket.connect_cf_domains): secure=true — TLS 443, false — plain 80.
+pub async fn ws_connect_once_explicit(
+    dial_addr: &str,
+    domain: &str,
+    path: &str,
+    timeout: Duration,
+    secure: bool,
+) -> Result<RawWebSocket, WsError> {
     ws_connect_once_full(dial_addr, domain, path, timeout, None, secure).await
 }
 

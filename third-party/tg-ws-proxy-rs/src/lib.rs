@@ -81,6 +81,11 @@ pub unsafe extern "C" fn StartProxy(
 
     init_logging(is_verbose);
     cfproxy::clear_cfproxy_429_cooldowns();
+    // Python v1.12.0: cooldown'ы CF-таймаутов и TCP-бэкофф живут на процесс —
+    // сбрасываем их при каждом старте, чтобы «залипшее» состояние не переживало
+    // перезапуск ядра.
+    cfproxy::reset_cf_timeouts();
+    proxy::reset_tcp_backoff();
 
     if secret_str.len() == 32 {
         if hex::decode(&secret_str).is_ok() {

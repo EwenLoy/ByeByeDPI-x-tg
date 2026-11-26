@@ -54,8 +54,8 @@ android {
         minSdk = 21
         //noinspection OldTargetApi
         targetSdk = 34
-        versionCode = 29
-        versionName = "2.0.9"
+        versionCode = 30
+        versionName = "2.0.10"
 
         // Build stamp: shows up in diagnostics and in the log header.
         buildConfigField("String", "BUILD_STAMP", "\"$buildStamp\"")

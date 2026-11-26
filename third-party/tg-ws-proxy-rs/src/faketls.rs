@@ -33,6 +33,63 @@ const SH_PUBKEY_OFF: usize = 89;
 
 type HmacSha256 = Hmac<Sha256>;
 
+// ---------------------------------------------------------------------------
+// Анти-пробинг: повторённый ClientHello (Python v1.12.0, PR #1532)
+// Записанный DPI ClientHello валиден ± TIMESTAMP_TOLERANCE, поэтому
+// verify_client_hello пропустит реплей. Запоминаем client_random каждого
+// принятого hello на всё окно и отправляем повторы на домен-маскировку.
+// ---------------------------------------------------------------------------
+
+const REPLAY_WINDOW_SECS: i64 = 2 * TIMESTAMP_TOLERANCE + 1; // 241: окно + 1 c (truncated clock)
+const REPLAY_CACHE_SIZE: usize = 65536;
+
+struct ReplayCache {
+    // (client_random, expires_at); вставка = порядок истечения
+    expiry: std::collections::VecDeque<(Vec<u8>, std::time::Instant)>,
+}
+
+impl ReplayCache {
+    const fn new() -> Self {
+        ReplayCache {
+            expiry: std::collections::VecDeque::new(),
+        }
+    }
+
+    fn first_seen(&mut self, client_random: &[u8; 32]) -> bool {
+        let now = std::time::Instant::now();
+        let window = Duration::from_secs(REPLAY_WINDOW_SECS.max(1) as u64);
+        // Вставка в порядке истечения: протухшие в начале очереди.
+        while let Some((_, until)) = self.expiry.front() {
+            if *until <= now {
+                self.expiry.pop_front();
+            } else {
+                break;
+            }
+        }
+        // Python fix #1532 step2: В САМОМ ДЕЛЕ сначала смотрим ключ,
+        // потом эвикция по размеру (иначе живая запись вылетала раньше лукупа).
+        if self.expiry.iter().any(|(k, _)| k == client_random) {
+            return false;
+        }
+        if self.expiry.len() >= REPLAY_CACHE_SIZE {
+            self.expiry.pop_front();
+        }
+        self.expiry
+            .push_back((client_random.to_vec(), now + window));
+        true
+    }
+}
+
+static REPLAY_CACHE: once_cell::sync::Lazy<std::sync::Mutex<ReplayCache>> =
+    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(ReplayCache::new()));
+
+fn replay_first_seen(client_random: &[u8; 32]) -> bool {
+    match REPLAY_CACHE.lock() {
+        Ok(mut c) => c.first_seen(client_random),
+        Err(_) => true,
+    }
+}
+
 pub struct FakeTlsStream {
     pub read: Box<dyn AsyncRead + Send + Unpin>,
     pub write: Box<dyn AsyncWrite + Send + Unpin>,
@@ -357,6 +414,19 @@ pub async fn server_handshake(
 
     match verify_client_hello(&client_hello, secret) {
         Some((client_random, session_id, ts)) => {
+            // A recorded hello stays valid for minutes; answering it again would
+            // tell an active prober that this is a proxy, not the masking site.
+            let replayed = !replay_first_seen(&client_random);
+            if replayed {
+                log_debug(&format!(
+                    "[{}] Fake TLS hello replayed (size={} rec={}) -> masking",
+                    label,
+                    client_hello.len(),
+                    record_len
+                ));
+                proxy_to_masking_domain(conn, client_hello, masking, label).await;
+                return None;
+            }
             log_debug(&format!("[{}] Fake TLS handshake ok (ts={})", label, ts));
             let server_hello = build_server_hello(secret, &client_random, &session_id);
             if conn.write_all(&server_hello).await.is_err() {

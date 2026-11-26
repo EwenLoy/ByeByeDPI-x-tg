@@ -43,6 +43,11 @@ class TgWsProxyService : Service() {
     @Volatile
     private var healthRestarts = 0
     @Volatile
+    private var wedgeRestarts = 0
+    private var lastWedgeRestartMs = 0L
+    /** Окно сэмплов [новых сессий, одновременно живых] для детекта шторма. */
+    private val wedgeWindow = ArrayList<IntArray>()
+    @Volatile
     private var lastTcpFallbackStat = 0L
     private var networkRegisteredAtMs = 0L
     private var lastNetworkRestartMs = 0L
@@ -115,6 +120,24 @@ class TgWsProxyService : Service() {
         private const val HEALTH_CHECK_MS = 5_000L
         private const val PORT_PROBE_TIMEOUT_MS = 1500
 
+        /**
+         * Сторож «шторм без единой живой сессии».
+         *
+         * После перезахода Telegram открывает 10-20 соединений сразу. Ядро
+         * поднимает их к одному закреплённому CF-домену, Cloudflare принимает
+         * WS и тут же его закрывает (в логе: `CF ok ...` → через 0.1с
+         * `WS session closed (upstream: ws_close)`), но для ядра это «успех»:
+         * домен не меняется, кулдауны не ставятся. Клиент уходит в бэкофф, и
+         * снаружи это те самые 1-3 минуты «Подключение к прокси», которые
+         * лечатся только перезапуском ядра (StartProxy заново рандомит домен
+         * под DC и чистит 429-кулдауны).
+         */
+        private const val WEDGE_WINDOW_TICKS = 6            // 6 тиков по 5с = 30с
+        private const val WEDGE_MIN_NEW_SESSIONS = 8        // столько новых сессий за окно
+        private const val WEDGE_MAX_ALIVE = 1               // ни одна не удержалась
+        private const val WEDGE_RESTART_COOLDOWN_MS = 90_000L
+        private const val MAX_WEDGE_RESTARTS = 4
+
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning
         private val _isVerifiedRunning = MutableStateFlow(false)
@@ -140,6 +163,8 @@ class TgWsProxyService : Service() {
             ACTION_START -> {
                 autoRestartAttempts = 0
                 healthRestarts = 0
+                wedgeRestarts = 0
+                wedgeWindow.clear()
                 if (!LogManager.isListening()) LogManager.startListening(this)
                 LogManager.app("START: запрос запуска прокси")
                 val bindIp = intent.getStringExtra(EXTRA_BIND_IP) ?: "127.0.0.1"
@@ -499,10 +524,11 @@ class TgWsProxyService : Service() {
                     continue
                 }
                 failures = 0
+                val stats = try { NativeProxy.getStats() } catch (_: Throwable) { null }
+                trackWedge(stats)
                 val now = System.currentTimeMillis()
                 if (now - lastBeatMs >= HEARTBEAT_MS) {
                     lastBeatMs = now
-                    val stats = try { NativeProxy.getStats() } catch (_: Throwable) { null }
                     LogManager.app("beat: ${stats ?: "статистики нет"}")
                 }
             }
@@ -516,6 +542,54 @@ class TgWsProxyService : Service() {
             java.net.Socket().use { s -> s.connect(java.net.InetSocketAddress(host, port), PORT_PROBE_TIMEOUT_MS); true }
         } catch (_: Exception) { false }
     }
+
+    /**
+     * Детект «шторм без единой живой сессии».
+     *
+     * Симптом в логе ядра: пачка `handshake ok` → `CF ok <домен>` → через 0.1с
+     * `WS session closed (upstream: ws_close)`, и так по кругу. Ядро не считает
+     * такую сессию провалом, поэтому домен под DC остаётся тем же и каждый
+     * следующий заход клиента бьётся в тот же край Cloudflare.
+     *
+     * Условие срабатывания: за 30 секунд появилось >= 8 новых сессий, но
+     * одновременно живых было не больше одной — значит ни одна не удержалась.
+     * Тогда перезапускаем ядро: StartProxy заново рандомит CF-домен под DC и
+     * чистит 429-кулдауны (то же, что пользователь делает руками, только
+     * за 30 секунд вместо 1-3 минут).
+     */
+    private fun trackWedge(stats: String?) {
+        if (stats == null) { wedgeWindow.clear(); return }
+        val sessions = parseStatInt(stats, "cf=") + parseStatInt(stats, "ws=")
+        val active = parseStatInt(stats, "active=")
+        wedgeWindow.add(intArrayOf(sessions, active))
+        while (wedgeWindow.size > WEDGE_WINDOW_TICKS) wedgeWindow.removeAt(0)
+        if (wedgeWindow.size < WEDGE_WINDOW_TICKS) return
+
+        val newSessions = wedgeWindow.last()[0] - wedgeWindow.first()[0]
+        val maxAlive = wedgeWindow.maxOf { it[1] }
+        if (newSessions < WEDGE_MIN_NEW_SESSIONS || maxAlive > WEDGE_MAX_ALIVE) return
+
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastWedgeRestartMs < WEDGE_RESTART_COOLDOWN_MS) return
+        wedgeWindow.clear()
+        if (wedgeRestarts >= MAX_WEDGE_RESTARTS) {
+            LogManager.app(
+                "watchdog: сессии не держатся ($newSessions новых за 30с), лимит перезапусков $MAX_WEDGE_RESTARTS исчерпан",
+                error = true
+            )
+            return
+        }
+        wedgeRestarts++
+        lastWedgeRestartMs = now
+        LogManager.app(
+            "watchdog: $newSessions новых сессий за 30с, одновременно живых не больше $maxAlive -> перезапуск ядра $wedgeRestarts/$MAX_WEDGE_RESTARTS",
+            error = true
+        )
+        restartProxy()
+    }
+
+    private fun parseStatInt(stats: String, key: String): Int =
+        extractStat(stats, key).toIntOrNull() ?: 0
 
     private fun updateTgWsRuntimeStatus(rawStats: String) {
         val m = java.util.regex.Pattern.compile("(ws|direct|tcp_fallback|cfproxy)=").matcher(rawStats)
@@ -550,7 +624,7 @@ class TgWsProxyService : Service() {
     private fun parseHumanBytes(s: String): Long {
         val m = java.util.regex.Pattern.compile("([0-9.]+)([KMGT]?)").matcher(s.trim())
         if (!m.matches()) return 0L
-        val num = m.group(1).toDoubleOrNull() ?: 0.0
+        val num = m.group(1)?.toDoubleOrNull() ?: 0.0
         return when (m.group(2)) {
             "K" -> (num * 1024).toLong(); "M" -> (num * 1024 * 1024).toLong()
             "G" -> (num * 1024 * 1024 * 1024).toLong(); "T" -> (num * 1024L * 1024 * 1024 * 1024).toLong()

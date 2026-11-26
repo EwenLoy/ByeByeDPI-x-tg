@@ -1,13 +1,71 @@
 use crate::config::*;
-use crate::ws::{is_http_status_error, ws_connect_once, ws_connect_once_sni, RawWebSocket, WsError};
+use crate::ws::{is_http_status_error, RawWebSocket, WsError};
 use crate::{ldebug, lerror, linfo, lwarn};
 use serde::Deserialize;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
+use tokio_util::sync::CancellationToken;
 
 use once_cell::sync::Lazy;
 static CFPROXY_SEM: Lazy<Semaphore> = Lazy::new(|| Semaphore::new(CFPROXY_GLOBAL_PARALLEL));
+
+// ---------------------------------------------------------------------------
+// CF connect: cooldown по таймаутам + TLS↔HTTP чередование.
+// Порт proxy/cf_websocket.py (Python v1.12.0).
+// ---------------------------------------------------------------------------
+
+static CF_TIMEOUT_UNTIL: Lazy<parking_lot::RwLock<std::collections::HashMap<(String, bool), f64>>> =
+    Lazy::new(|| parking_lot::RwLock::new(std::collections::HashMap::new()));
+
+static CF_CONN_TLS: AtomicU64 = AtomicU64::new(0);
+static CF_CONN_NO_TLS: AtomicU64 = AtomicU64::new(0);
+
+pub fn reset_cf_timeouts() {
+    CF_TIMEOUT_UNTIL.write().clear();
+    CF_CONN_NO_TLS.store(0, Ordering::Relaxed);
+    CF_CONN_TLS.store(0, Ordering::Relaxed);
+}
+
+pub fn cf_prefers_tls() -> bool {
+    CF_CONN_TLS.load(Ordering::Relaxed) >= CF_CONN_NO_TLS.load(Ordering::Relaxed)
+}
+
+pub fn cf_tls_in_cooldown(name: &str) -> bool {
+    let now = now_monotonic();
+    let map = CF_TIMEOUT_UNTIL.read();
+    map.get(&(name.to_string(), true))
+        .map(|t| *t > now)
+        .unwrap_or(false)
+}
+
+fn cf_timeout_get(key: &(String, bool)) -> Option<f64> {
+    CF_TIMEOUT_UNTIL.read().get(key).copied()
+}
+
+fn cf_timeout_set(key: (String, bool), until: f64) {
+    CF_TIMEOUT_UNTIL.write().insert(key, until);
+}
+
+fn cf_timeout_remove(key: &(String, bool)) {
+    CF_TIMEOUT_UNTIL.write().remove(key);
+}
+
+/// Обновление списка cooldown перед установкой нового значения:
+/// просроченные (until + CF_TIMEOUT_COOLDOWN <= now) вычищаются.
+fn cf_timeout_prune_and_set(key: (String, bool), now: f64) {
+    let mut map = CF_TIMEOUT_UNTIL.write();
+    let stale: Vec<(String, bool)> = map
+        .iter()
+        .filter(|(_, until)| *until + CF_TIMEOUT_COOLDOWN <= now)
+        .map(|(k, _)| k.clone())
+        .collect();
+    for k in stale {
+        map.remove(&k);
+    }
+    map.insert(key, now + CF_TIMEOUT_COOLDOWN);
+}
 
 // ---------------------------------------------------------------------------
 // Domain decoding
@@ -136,12 +194,12 @@ pub fn next_cfproxy_429_cooldown_delay(prev: &Cfproxy429State, retry_after: Dura
     let mut delay = CFPROXY_429_COOLDOWN;
     for _ in 0..strikes {
         delay *= 2;
-        if delay >= CFPROXY_429_MAX_COOLDOWN {
-            return CFPROXY_429_MAX_COOLDOWN;
+        if delay >= CFPROXY_429_MAX_LADDER {
+            return CFPROXY_429_MAX_LADDER;
         }
     }
-    if delay > CFPROXY_429_MAX_COOLDOWN {
-        return CFPROXY_429_MAX_COOLDOWN;
+    if delay > CFPROXY_429_MAX_LADDER {
+        return CFPROXY_429_MAX_LADDER;
     }
     delay
 }
@@ -580,45 +638,208 @@ pub async fn cf_connect_domain(
     path: &str,
     timeout: f64,
     tls_name: Option<&str>,
+    use_tls: bool,
 ) -> (Option<RawWebSocket>, String, Option<WsError>) {
     let path = if path.is_empty() { "/apiws" } else { path };
 
     let attempt_timeout = crate::ws::ws_connect_timeout(timeout);
-    let mut phase_timeout = attempt_timeout;
-    if phase_timeout > CFPROXY_DIAL_PHASE_TIMEOUT {
-        phase_timeout = CFPROXY_DIAL_PHASE_TIMEOUT;
-    }
+    // Общий бюджет попытки = ladder (Python v1.12.0: min(timeout, ladder)).
+    // Внутренние фазы (hostname / DoH+IP) капнуты модовым бюджетом фаз,
+    // но суммарно могут занять весь ladder-бюджет.
+    let total_budget = attempt_timeout;
+    let phase_cap = total_budget.min(CFPROXY_DIAL_PHASE_TIMEOUT);
 
-    let host_timeout = new_timed_attempt_timeout(phase_timeout, phase_timeout);
-    let host_attempt = match tls_name {
-        Some(name) => ws_connect_once_sni(domain, domain, path, host_timeout, name).await,
-        None => ws_connect_once(domain, domain, path, host_timeout).await,
-    };
-    match host_attempt {
-        Ok(ws) => return (Some(ws), String::new(), None),
-        Err(host_err) => {
-            if is_http_status_error(&host_err, 429) {
-                return (None, String::new(), Some(host_err));
-            }
-            let resolved_ip = resolve_doh(domain).await.unwrap_or_default();
-            if resolved_ip.is_empty() {
-                ldebug!(" CF DNS {} -> no result", domain);
-                return (None, String::new(), Some(host_err));
-            }
-            ldebug!(" CF DNS {} -> {}", domain, resolved_ip);
-            let ip_timeout = new_timed_attempt_timeout(phase_timeout, phase_timeout);
-            let ip_attempt = match tls_name {
-                Some(name) => {
-                    ws_connect_once_sni(&resolved_ip, domain, path, ip_timeout, name).await
+    let dial = async {
+        let host_timeout = new_timed_attempt_timeout(phase_cap, phase_cap);
+        let host_attempt = match (tls_name, use_tls) {
+            (Some(name), _) => crate::ws::ws_connect_once_full(domain, domain, path, host_timeout, Some(name), use_tls).await,
+            (None, true) => crate::ws::ws_connect_once_explicit(domain, domain, path, host_timeout, true).await,
+            (None, false) => crate::ws::ws_connect_once_explicit(domain, domain, path, host_timeout, false).await,
+        };
+        match host_attempt {
+            Ok(ws) => return (Some(ws), String::new(), None),
+            Err(host_err) => {
+                if is_http_status_error(&host_err, 429) {
+                    return (None, String::new(), Some(host_err));
                 }
-                None => ws_connect_once(&resolved_ip, domain, path, ip_timeout).await,
-            };
-            match ip_attempt {
-                Ok(ws) => (Some(ws), resolved_ip, None),
-                Err(e) => (None, resolved_ip, Some(e)),
+                let resolved_ip = resolve_doh(domain).await.unwrap_or_default();
+                if resolved_ip.is_empty() {
+                    ldebug!(" CF DNS {} -> no result", domain);
+                    return (None, String::new(), Some(host_err));
+                }
+                ldebug!(" CF DNS {} -> {}", domain, resolved_ip);
+                let ip_timeout = new_timed_attempt_timeout(phase_cap, phase_cap);
+                let ip_attempt = match (tls_name, use_tls) {
+                    (Some(name), _) => crate::ws::ws_connect_once_full(&resolved_ip, domain, path, ip_timeout, Some(name), use_tls).await,
+                    (None, true) => crate::ws::ws_connect_once_explicit(&resolved_ip, domain, path, ip_timeout, true).await,
+                    (None, false) => crate::ws::ws_connect_once_explicit(&resolved_ip, domain, path, ip_timeout, false).await,
+                };
+                match ip_attempt {
+                    Ok(ws) => (Some(ws), resolved_ip, None),
+                    Err(e) => (None, resolved_ip, Some(e)),
+                }
             }
         }
+    };
+
+    // Общий бюджет попытки ограничен ladder-таймаутом: превышение => Timeout
+    // для cooldown-логики (как asyncio.wait_for в оригинале).
+    match tokio::time::timeout(total_budget, dial).await {
+        Ok(r) => r,
+        Err(_) => (None, String::new(), Some(WsError::Timeout)),
     }
+}
+
+/// Порт cf_websocket.connect_cf_domains (Python v1.12.0).
+/// candidates: пары (base, host=kwsN.base); возврат (ws, выбранный base).
+/// Поведение:
+///  * cooldown 30s на пару (base, режим) после TimeoutError;
+///  * чередование TLS(443)/plain(80) при таймаутах: tls_first XOR (timeouts % 2);
+///  * лестница таймаутов 3/3/5/5/10 c (в моде дополнительно capped бюджетом фаз);
+///  * single-domain retry: дубль кандидата пробует противоположный режим;
+///  * статистика успехов запоминает рабочий режим (cf_prefers_tls).
+pub async fn connect_cf_domains(
+    candidates: Vec<(String, String)>,
+    label: &str,
+    secure: bool,
+    ws_path: &str,
+    cancel: &CancellationToken,
+) -> Option<(RawWebSocket, String)> {
+    let mut domains = candidates;
+    let retry_single_domain = secure && domains.len() == 1;
+    if retry_single_domain {
+        let dup = domains[0].clone();
+        domains.push(dup);
+    }
+
+    let mut timeouts: usize = 0;
+    let tls_first = cf_prefers_tls();
+
+    for (index, (name, host)) in domains.into_iter().enumerate() {
+        let mut use_tls = secure && (tls_first != (timeouts % 2 == 1));
+        if retry_single_domain && index == 1 && timeouts == 0 {
+            // Первый заход был пропущен из-за cooldown — пробуем другой режим.
+            use_tls = !tls_first;
+        }
+
+        let key = (name.clone(), use_tls);
+        let retry_at = cf_timeout_get(&key);
+        if let Some(t) = retry_at {
+            let now = now_monotonic();
+            if now < t {
+                continue;
+            }
+            // «Замок»: concurrent-клиенты не пойдут в тот же диал, пока мы сами дозваниваемся.
+            cf_timeout_set(key.clone(), f64::INFINITY);
+        }
+
+        let ladder = CF_CONNECT_TIMEOUTS[timeouts.min(CF_CONNECT_TIMEOUTS.len() - 1)];
+        let attempt_timeout = ladder.min(10.0);
+
+        ldebug!(" CF try {}", host);
+        let _permit = match acquire_cfproxy_attempt_slot().await {
+            Some(p) => p,
+            None => {
+                if let Some(orig) = retry_at {
+                    cf_timeout_set(key.clone(), orig);
+                }
+                return None;
+            }
+        };
+        // SNI = базовый домен (DPI режет ClientHello с kwsN.*), Host = kwsN.<base>.
+        let tls_name: Option<String> = if use_tls { Some(name.clone()) } else { None };
+        let dial = cf_connect_domain(&host, ws_path, attempt_timeout, tls_name.as_deref(), use_tls);
+        tokio::pin!(dial);
+        let outcome = tokio::select! {
+            _ = cancel.cancelled() => None,
+            r = &mut dial => Some(r),
+        };
+
+        match outcome {
+            // Клиент умер / стоп-proxy: вернуть ранее существовавший замок.
+            None => {
+                if let Some(orig) = retry_at {
+                    if cf_timeout_get(&key) == Some(f64::INFINITY) {
+                        cf_timeout_set(key.clone(), orig);
+                    }
+                }
+                return None;
+            }
+            Some((ws_opt, ip, err)) => {
+                match (ws_opt, err) {
+                    (Some(ws), _) => {
+                        if use_tls {
+                            CF_CONN_TLS.fetch_add(1, Ordering::Relaxed);
+                        } else {
+                            CF_CONN_NO_TLS.fetch_add(1, Ordering::Relaxed);
+                        }
+                        if !ip.is_empty() {
+                            ldebug!(" CF ok {} via {}", host, ip);
+                        } else {
+                            ldebug!(" CF ok {} via hostname", host);
+                        }
+                        cf_timeout_remove(&key);
+                        clear_cfproxy_429_cooldown(&name);
+                        return Some((ws, name));
+                    }
+                    (None, Some(WsError::Timeout)) => {
+                        let now = now_monotonic();
+                        // Python: cooldown ставим, если у нас был свой retry_at
+                        // ИЛИ ключа в карте ещё нет (не затираем чужой свежий).
+                        if retry_at.is_some() || cf_timeout_get(&key).is_none() {
+                            cf_timeout_prune_and_set(key.clone(), now);
+                            lwarn!(
+                                "[{}] CF WebSocket timed out (host={}; tls={}); retry in {:.0}s",
+                                label,
+                                host,
+                                use_tls,
+                                CF_TIMEOUT_COOLDOWN
+                            );
+                        }
+                        timeouts += 1;
+                        if timeouts >= CF_CONNECT_TIMEOUTS.len() {
+                            break;
+                        }
+                        // Python: timeout -> continue, tail-break single-domain
+                        // не выполняется (dup-кандидат обязан сменить режим).
+                        continue;
+                    }
+                    (None, Some(e)) => {
+                        // Python 1.12: HTTP-ошибки лестницу НЕ съедают.
+                        // 429 в моде ставит свой ladder-cooldown (cfproxy_429).
+                        if is_http_status_error(&e, 429) {
+                            mark_cfproxy_429_cooldown(&name, &e);
+                        }
+                        if !ip.is_empty() {
+                            log_cf_conn_error(
+                                &format!(" CF fail {} via {}: {}", host, ip, e.compact()),
+                                &e,
+                            );
+                        } else {
+                            log_cf_conn_error(&format!(" CF fail {}: {}", host, e.compact()), &e);
+                        }
+                        if retry_at.is_some() && cf_timeout_get(&key) == Some(f64::INFINITY) {
+                            cf_timeout_set(key.clone(), retry_at.unwrap());
+                        }
+                        cf_timeout_remove(&key);
+                    }
+                    (None, None) => {
+                        if retry_at.is_some() && cf_timeout_get(&key) == Some(f64::INFINITY) {
+                            cf_timeout_set(key.clone(), retry_at.unwrap());
+                        }
+                        cf_timeout_remove(&key);
+                    }
+                }
+            }
+        }
+
+        if retry_single_domain {
+            // Python: у одиночного кандидата после попытки перебор закончен.
+            break;
+        }
+    }
+
+    None
 }
 
 pub fn log_cf_conn_error(msg: &str, err: &WsError) {
